@@ -1,0 +1,54 @@
+# Project and volume names are pinned rather than derived from the directory.
+# Compose otherwise prefixes everything with the folder name, so renaming the
+# checkout silently points the stack at a new, empty set of volumes and
+# orphans the database and the vector store where they stand.
+name: plutus
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: analyst
+      POSTGRES_PASSWORD: analyst
+      POSTGRES_DB: analyst_copilot
+    ports:
+      - "5433:5432"
+    volumes:
+      # PGDATA must be a named volume, not a host bind mount. Postgres refuses
+      # to start unless its data directory is 0700 or 0750, and a Windows bind
+      # mount reports every path as 0777 - chmod inside the container is a
+      # silent no-op, so the permission can never be satisfied.
+      - plutus_postgres:/var/lib/postgresql/data
+      # Dumps land here instead, in a plain host folder you can copy or commit
+      # to a backup system. This is the correct way to back up Postgres anyway:
+      # copying a live data directory is not crash-consistent.
+      - ./data/postgres-backup:/backup
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U analyst -d analyst_copilot"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  qdrant:
+    image: qdrant/qdrant:latest
+    restart: unless-stopped
+    ports:
+      - "6333:6333"
+    volumes:
+      # A named volume, for the same reason as Postgres but a different
+      # symptom. Qdrant tolerates the permissions a Windows bind mount
+      # reports, so this looked fine - until writes stopped completing
+      # entirely while reads stayed at 3ms. Measured back to back on one
+      # host: creating an empty collection took 0.07s on a named volume and
+      # never returned on the bind mount. Vector data is rebuildable from the
+      # originals in storage/filings, so nothing here needs to be a host
+      # folder; `pg_dump`-style export is the right way to get data out.
+      - plutus_qdrant:/qdrant/storage
+
+volumes:
+  # Explicit names, for the same reason as the project name above.
+  plutus_postgres:
+    name: plutus_postgres
+  plutus_qdrant:
+    name: plutus_qdrant

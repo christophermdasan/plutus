@@ -1,0 +1,250 @@
+@import "tailwindcss";
+
+@import "@fontsource/inter/400.css";
+@import "@fontsource/inter/500.css";
+@import "@fontsource/inter/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+
+/*
+  Warm-neutral ground, indigo accent. Financial documents are read for long
+  stretches, so the canvas stays paper-like rather than clinical white.
+
+  The accent is indigo rather than any green, because green is already spoken
+  for: --color-verified marks an answer checked against the source, and that
+  signal must not be diluted by decorative use of the same hue. Indigo also
+  holds its character against a warm ground in both themes, where a cooler
+  blue goes grey. It is used sparingly - it marks the one thing that matters
+  most here, a verifiable citation.
+*/
+@theme {
+  --font-sans: "Inter", -apple-system, "Segoe UI", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+
+  --color-canvas: #faf9f7;
+  --color-surface: #f2f0ec;
+  --color-raised: #ffffff;
+  --color-hover: #eceae4;
+  --color-border: #e6e3dc;
+  --color-border-strong: #d5d1c8;
+
+  --color-ink: #2a2925;
+  --color-ink-muted: #6b6862;
+  --color-ink-faint: #97938b;
+
+  --color-accent: #5145cd;
+  --color-accent-hover: #43389f;
+  --color-accent-soft: #eeedfb;
+  --color-accent-ink: #413594;
+
+  --color-verified: #3f7d58;
+  --color-verified-soft: #ecf4ee;
+
+  --color-warn: #9a6b1f;
+  --color-warn-soft: #fdf3e2;
+
+  --color-error: #a8402f;
+  --color-error-soft: #fbeeeb;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --color-canvas: #201f1d;
+    --color-surface: #191817;
+    --color-raised: #292826;
+    --color-hover: #323130;
+    --color-border: #35332f;
+    --color-border-strong: #47443f;
+
+    --color-ink: #edeae4;
+    --color-ink-muted: #a7a29a;
+    --color-ink-faint: #7d7972;
+
+    --color-accent: #7f6ff0;
+    --color-accent-hover: #9082f3;
+    --color-accent-soft: #241f3a;
+    --color-accent-ink: #a99df8;
+
+    --color-verified: #6fb98a;
+    --color-verified-soft: #1d2a22;
+
+    --color-warn: #d4a24c;
+    --color-warn-soft: #2e2517;
+
+    --color-error: #e08472;
+    --color-error-soft: #2f1e1b;
+  }
+}
+
+:root[data-theme="dark"] {
+  --color-canvas: #201f1d;
+  --color-surface: #191817;
+  --color-raised: #292826;
+  --color-hover: #323130;
+  --color-border: #35332f;
+  --color-border-strong: #47443f;
+
+  --color-ink: #edeae4;
+  --color-ink-muted: #a7a29a;
+  --color-ink-faint: #7d7972;
+
+  --color-accent: #7f6ff0;
+  --color-accent-hover: #9082f3;
+  --color-accent-soft: #241f3a;
+  --color-accent-ink: #a99df8;
+
+  --color-verified: #6fb98a;
+  --color-verified-soft: #1d2a22;
+
+  --color-warn: #d4a24c;
+  --color-warn-soft: #2e2517;
+
+  --color-error: #e08472;
+  --color-error-soft: #2f1e1b;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11";
+}
+
+::selection {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-ink);
+}
+
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+/*
+  The composer is exempt. It is the page's primary control and holds focus
+  almost permanently, so a focus ring there marks the resting state rather
+  than telling anyone anything. Its wrapper already carries a visible border,
+  so the control is still plainly delineated - which is why this is scoped to
+  one element instead of weakening :focus-visible for keyboard users
+  everywhere.
+*/
+textarea[data-composer]:focus,
+textarea[data-composer]:focus-visible {
+  outline: none;
+}
+
+.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Scrollbars that don't fight the warm ground. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: 999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.rise {
+  animation: rise 240ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+.slide-in-right {
+  animation: slide-in-right 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.fade-in {
+  animation: fade-in 160ms ease-out both;
+}
+
+/* Three dots for "thinking", quieter than a spinner. */
+@keyframes pulse-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+.dot {
+  animation: pulse-dot 1.3s infinite ease-in-out both;
+}
+.dot:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.dot:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: -220px 0;
+  }
+  100% {
+    background-position: 220px 0;
+  }
+}
+.shimmer {
+  background-image: linear-gradient(
+    90deg,
+    var(--color-border) 0px,
+    var(--color-border-strong) 44px,
+    var(--color-border) 88px
+  );
+  background-size: 220px 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

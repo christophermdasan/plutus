@@ -1,0 +1,36 @@
+# Optional hardware acceleration for the local embedding and reranking models.
+#
+# Nothing in the application changes when you install one of these:
+# app/hardware.py notices the new execution provider has appeared and routes
+# both models to it. This is purely an install-time decision, and it is safe
+# to get wrong - a runtime whose provider is unavailable simply is not used,
+# and the app falls back to the CPU.
+#
+# Pick the line for your hardware and install it alongside requirements.txt:
+#
+#   pip install -r requirements.txt -r requirements-accelerate.txt
+#
+# ---------------------------------------------------------------------------
+# NVIDIA, any OS.  Needs a current NVIDIA driver.
+onnxruntime-gpu==1.29.0
+#
+# ---------------------------------------------------------------------------
+# AMD or Intel GPU on WINDOWS - comment out the line above and use this one.
+# DirectML is the only GPU path for an AMD card on Windows. It also drives
+# Intel Arc, and NVIDIA cards, though CUDA is faster on NVIDIA.
+#
+#   onnxruntime-directml==1.24.4
+#
+# NOTE: onnxruntime-gpu and onnxruntime-directml both replace the base
+# onnxruntime package. Install one, not both.
+#
+# ---------------------------------------------------------------------------
+# AMD on LINUX (ROCm) is not published to PyPI. Install AMD's own build:
+#
+#   pip install onnxruntime-rocm --index-url https://repo.radeon.com/rocm/manylinux/rocm-rel-6.2/
+#
+# ---------------------------------------------------------------------------
+# Apple silicon needs NOTHING. CoreML support is compiled into the default
+# macOS wheel (verified present in the shipped library), so it is detected and
+# used automatically. If it turns out slower than the CPU on your machine -
+# possible for a model this small - set FORCE_CPU=true in .env.

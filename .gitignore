@@ -1,0 +1,44 @@
+# Secrets - never commit. .env.example is the committed template.
+.env
+frontend/.env
+!.env.example
+
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+backend/.pytest_cache/
+backend/scripts/eval_report.json
+
+frontend/node_modules/
+frontend/dist/
+frontend/.playwright-mcp/
+
+# Runtime state. All of it is local and rebuildable except the originals in
+# storage/filings and the Postgres data directory - those are the backup set.
+/storage/
+data/postgres/
+data/qdrant/
+data/analyst-copilot-data.zip
+
+*.pyc
+.DS_Store
+
+# Logs and pids written by the bootstrap scripts.
+.run/
+backend/uvicorn*.log
+backend/uvicorn.pid
+
+# Playwright MCP artifacts
+.playwright-mcp/
+
+# Reference filings: large binaries, fetched on demand via
+# backend/scripts/fetch_reference_filings.py
+reference/
+
+# Practice data pack (CC BY-NC 4.0 FinanceBench + EDGAR filings, ~336M).
+# Re-obtainable from the supplied zip; never belongs in the repo.
+data/sample/analyst-copilot-data/
+
+# Run artifacts written by the benchmark and backup tooling.
+backend/perf_report.json
+data/postgres-backup/
