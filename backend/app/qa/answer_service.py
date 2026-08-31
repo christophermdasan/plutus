@@ -96,11 +96,23 @@ def _cited(pairs, offset: int) -> list[Citation]:
     printed on that page, which runs behind the index on a filing whose
     front matter is counted but not numbered. Citing the index alone sends a
     reader to a page number their copy does not have.
+
+    One entry per page: the model is free to quote the same page for
+    several clauses in its answer, but the UI shows a source as a chip per
+    page, and a page repeated because it supported three different
+    sentences is not three sources - it is one, shown three times. The
+    first quote for a given page is kept since verification already
+    checked every quote before this runs; which of several passing quotes
+    is displayed is not a distinction the reader needs.
     """
-    return [
-        Citation(page=page, quote=quote, label=label_for(page, offset))
-        for page, quote in pairs
-    ]
+    seen_pages: set[int] = set()
+    citations = []
+    for page, quote in pairs:
+        if page in seen_pages:
+            continue
+        seen_pages.add(page)
+        citations.append(Citation(page=page, quote=quote, label=label_for(page, offset)))
+    return citations
 
 
 def _stated_figures(text: str) -> list[float]:

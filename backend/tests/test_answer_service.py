@@ -2,7 +2,7 @@ import pytest
 
 from app.domain.models import Passage
 from app.exceptions import LLMError
-from app.qa.answer_service import AnswerService
+from app.qa.answer_service import AnswerService, _cited
 from app.qa.llm_client import LLMAnswer
 from app.retrieval.retriever import RetrievalResult
 
@@ -111,6 +111,21 @@ def test_declines_when_the_answer_states_a_number_absent_from_its_own_quote():
 
     result = _service(llm).answer("q", "f1", FakeRetriever(_relevant()), PAGE_TEXT)
     assert result.found is False
+
+
+def test_cited_collapses_repeat_citations_of_the_same_page():
+    # A model quoting the same page for several clauses in one answer is
+    # one source, not several - the UI shows a chip per entry, so the
+    # duplicates that reach it become repeated chips.
+    citations = _cited(
+        [(62, "quote A"), (69, "quote B"), (62, "quote A again"), (69, "quote C"), (69, "quote D")],
+        offset=0,
+    )
+
+    assert [c.page for c in citations] == [62, 69]
+    # First quote for a page wins - it already passed verification.
+    assert citations[0].quote == "quote A"
+    assert citations[1].quote == "quote B"
 
 
 def test_declines_when_the_cited_page_is_outside_the_filing():
