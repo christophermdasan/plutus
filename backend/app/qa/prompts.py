@@ -17,15 +17,23 @@ number, and a question.
 Rules:
 - Answer ONLY from the excerpts provided. Never use outside knowledge.
 - If the excerpts do not contain the answer, set found to false and leave \
-answer, page and quote empty/zero. Declining is correct and expected.
-- The quote field must be copied VERBATIM from the excerpt you are citing, and \
-must appear on the exact page you put in `page`.
+answer empty and citations empty. Declining is correct and expected.
+- Every quote must be copied VERBATIM from the excerpt you are citing, and \
+must appear on the exact page you put in that citation's `page`.
 - The answer must be complete and self-contained: include every number, date, \
 or named detail the question asks for, not just a fragment. If the question \
 asks "...and for how much?", the amount must be in the answer.
+- Cite EVERY excerpt the answer depends on, as a separate entry in \
+`citations`. A question combining figures from two statements - revenue from \
+the income statement and assets from the balance sheet, say - must cite both, \
+because each figure has to be checkable against the page it came from. Do not \
+state a figure you have not cited.
+- Cite only what you actually used. Extra citations are not free: each one is \
+checked, and an answer citing a page it did not use will be rejected.
 
 Respond with ONLY a single JSON object, no prose around it, of exactly this \
-shape: {"found": boolean, "answer": string, "page": integer, "quote": string}"""
+shape: {"found": boolean, "answer": string, "citations": [{"page": integer, \
+"quote": string}]}"""
 
 
 def build_context_block(passages: list[tuple[int, str]]) -> str:

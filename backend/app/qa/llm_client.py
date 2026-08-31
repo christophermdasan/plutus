@@ -18,10 +18,15 @@ import time
 from collections.abc import Iterator
 
 import httpx
-from pydantic import BaseModel, ValidationError as PydanticValidationError
+from pydantic import BaseModel, ValidationError as PydanticValidationError, model_validator
 
 from app.config import settings
-from app.exceptions import LLMError, LLMNotConfiguredError, LLMRateLimitedError
+from app.exceptions import (
+    LLMError,
+    LLMMalformedResponseError,
+    LLMNotConfiguredError,
+    LLMRateLimitedError,
+)
 from app.qa import prompts
 
 logger = logging.getLogger(__name__)
@@ -32,6 +37,14 @@ _MAX_BACKOFF_SECONDS = 30.0
 # Beyond this, the wait is a real quota exhaustion rather than a burst
 # limit, and the honest thing is to tell the user instead of hanging.
 _RETRYABLE_WAIT_SECONDS = 10.0
+# Server-side conditions that clear on their own: overloaded, bad gateway,
+# gateway timeout. A 500 is excluded - that is usually a malformed request
+# and retrying it just repeats the mistake.
+_TRANSIENT_STATUS = frozenset({502, 503, 504})
+# How many times to ask again when the model's own output will not parse.
+# Three is enough to clear a one-off mangling without making a model that
+# genuinely cannot produce the schema cost three times as long.
+_MAX_PARSE_ATTEMPTS = 3
 
 
 def _quota_hint(response: httpx.Response, delay: float) -> str:
@@ -46,18 +59,43 @@ def _quota_hint(response: httpx.Response, delay: float) -> str:
     return f"This is a short-term rate limit. Wait {wait} and ask again."
 
 
+class LLMCitation(BaseModel):
+    page: int = 0
+    quote: str = ""
+
+
 class LLMAnswer(BaseModel):
     """The structured shape every answer must arrive in.
 
     Constraining generation to this schema guarantees the *shape* of a
     citation. It says nothing about whether the content is true - that is
     the verifier's job, downstream.
+
+    Both the list form and the older flat page/quote form are accepted.
+    Questions needing evidence from two statements need the list; plenty of
+    questions are answered from one page and models do not reliably switch
+    schema on request, so normalising here means nothing downstream has to
+    know which shape arrived.
     """
 
     found: bool
     answer: str = ""
     page: int = 0
     quote: str = ""
+    citations: list[LLMCitation] = []
+
+    @model_validator(mode="after")
+    def _normalise_citations(self) -> "LLMAnswer":
+        if not self.citations and self.quote:
+            self.citations = [LLMCitation(page=self.page, quote=self.quote)]
+        # A citation with no quote cannot be verified against a page, so it
+        # is dropped here rather than failing verification later with a
+        # message that suggests the page was wrong.
+        self.citations = [c for c in self.citations if c.quote.strip()]
+        if self.citations and not self.quote:
+            self.page = self.citations[0].page
+            self.quote = self.citations[0].quote
+        return self
 
 
 _HEALTH_CONTEXT = [(1, "Total revenue for fiscal year 2023 was $12.4 million.")]
@@ -149,6 +187,21 @@ class LLMClient:
                     retry_after=delay,
                 )
 
+            # A provider under load says so with a 5xx and means "try
+            # again": Gemini's 503 body reads "Spikes in demand are usually
+            # temporary." Treated as fatal it ended a 136-question run at
+            # question 26, and would fail a user's question for a condition
+            # that clears in seconds. Retried on the same backoff as a rate
+            # limit; a genuine outage still surfaces once the attempts run
+            # out.
+            if response.status_code in _TRANSIENT_STATUS and attempt < _MAX_ATTEMPTS - 1:
+                delay = min(_DEFAULT_BACKOFF_SECONDS * (attempt + 1), _MAX_BACKOFF_SECONDS)
+                logger.info(
+                    "Provider returned %s; retrying in %.0fs", response.status_code, delay
+                )
+                time.sleep(delay)
+                continue
+
             if response.is_error:
                 # The status alone doesn't say why; the body carries the
                 # actual reason (bad model name, invalid parameter).
@@ -169,17 +222,47 @@ class LLMClient:
     # -- public API --------------------------------------------------------
 
     def answer(self, question: str, passages: list[tuple[int, str]]) -> LLMAnswer:
+        """Ask for an answer, retrying output the schema cannot read.
+
+        A model that mangles its JSON has usually not failed at the task -
+        observed live, MiniMax M3 put a stray quote inside a page number and
+        the answer inside was correct, with both pages cited. Providers are
+        measurably non-deterministic run to run even at temperature 0 (two
+        identical 136-question evaluations differed on 16 questions), so
+        asking again is likely to produce readable output rather than the
+        same broken text.
+
+        Bounded, because a model that cannot produce the schema will not
+        learn to; past the limit the caller turns this into an honest
+        "not found" rather than an error page.
+        """
         self._require_key()
-        response = self._post(
-            self._payload(
-                prompts.ANSWER_SYSTEM_PROMPT, prompts.build_answer_prompt(question, passages)
-            )
+        payload = self._payload(
+            prompts.ANSWER_SYSTEM_PROMPT, prompts.build_answer_prompt(question, passages)
         )
-        try:
-            content = response.json()["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, ValueError) as exc:
-            raise LLMError(f"Unexpected LLM response shape: {response.text[:300]}") from exc
-        return self._parse(content)
+
+        for attempt in range(_MAX_PARSE_ATTEMPTS):
+            response = self._post(payload)
+            try:
+                content = response.json()["choices"][0]["message"]["content"]
+            except (KeyError, IndexError, ValueError) as exc:
+                raise LLMError(f"Unexpected LLM response shape: {response.text[:300]}") from exc
+
+            try:
+                return self._parse(content)
+            except LLMError:
+                logger.info(
+                    "Model returned unparseable JSON (attempt %d of %d)",
+                    attempt + 1, _MAX_PARSE_ATTEMPTS,
+                )
+
+        raise LLMMalformedResponseError(
+            "The AI returned a response that could not be read.",
+            detail=(
+                "This is a fault in the AI provider's output, not in the filing. "
+                "Asking again usually succeeds."
+            ),
+        )
 
     def stream_answer(self, question: str, passages: list[tuple[int, str]]) -> Iterator[str]:
         """Yield raw content deltas as they arrive.

@@ -173,14 +173,27 @@ class ConsideredOut(BaseModel):
     score: float
 
 
+class CitationOut(BaseModel):
+    page: int
+    quote: str
+    # The number printed on that page. `page` is what the source
+    # viewer navigates by; this is what the reader is shown.
+    label: int | None = None
+
+
 class AnswerOut(BaseModel):
     message_id: int
     session_id: int
     question: str
     found: bool
     answer: str
+    # `page`/`quote` remain the primary citation - the one the source drawer
+    # opens to, and what stored history carries. `citations` is every place
+    # the figure is reported, so the reader can check it against the
+    # statement, the MD&A or a note as they prefer.
     page: int | None
     quote: str
+    citations: list[CitationOut]
     reason: str
     considered: list[ConsideredOut]
     latency_ms: int
@@ -198,6 +211,7 @@ class AnswerOut(BaseModel):
             answer=answer.answer,
             page=answer.citation.page if answer.citation else None,
             quote=answer.citation.quote if answer.citation else "",
+            citations=[CitationOut(page=c.page, quote=c.quote, label=c.label) for c in answer.citations],
             reason=answer.reason,
             considered=[
                 ConsideredOut(page=c.page, excerpt=c.excerpt, score=c.score)
@@ -216,6 +230,9 @@ class MessageOut(BaseModel):
     found: bool
     page: int | None
     quote: str
+    # Reloaded history offers the same alternate locations the live answer
+    # did, rather than only the page it happened to open to.
+    citations: list[CitationOut]
     reason: str
     latency_ms: int
     feedback: int | None
@@ -231,6 +248,7 @@ class MessageOut(BaseModel):
             found=message.found,
             page=message.page,
             quote=message.quote,
+            citations=[CitationOut(page=c.page, quote=c.quote, label=c.label) for c in message.citations],
             reason=message.reason,
             latency_ms=message.latency_ms,
             feedback=message.feedback,

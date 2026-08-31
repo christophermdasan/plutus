@@ -1,4 +1,4 @@
-const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:8001";
+const API_BASE = import.meta.env.VITE_API_BASE ?? "http://localhost:7590";
 const TOKEN_KEY = "analyst_copilot_token";
 
 /** Thrown for any non-2xx response, carrying enough to render a good message. */
@@ -78,7 +78,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(
       "Can't reach the server. Is the backend running?",
       0,
-      "Start it with: uvicorn app.main:app --port 8001",
+      "Start it with: uvicorn app.main:app --port 7590",
     );
   }
 

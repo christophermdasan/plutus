@@ -6,7 +6,7 @@ Upload a filing (10-K, 10-Q, 8-K) as either a **PDF or the HTML EDGAR serves**, 
 question in plain English, and get an answer with the exact page it came from — or an
 honest "not found in this filing" when the evidence isn't there.
 
-![Answer with an inline citation and the source page open beside it](docs/screenshot.png)
+![Plutus showing a verified answer beside the cited filing page](docs/screenshot.png)
 
 ## Why you can trust the answers
 
@@ -18,22 +18,161 @@ scores +1, an honest refusal scores 0, and a confident wrong answer scores −1,
 guessing loses. That scoring policy is enforced in code, not just in evaluation:
 see `backend/app/qa/answer_service.py`.
 
-Every answer therefore has to clear three independent checks before you see it:
+Every answer has to clear three independent checks before you see it:
 
 1. **Retrieval has to find something genuinely relevant.** A cross-encoder scores
    the question against each candidate passage; if nothing clears the bar, the model
    is never even called.
-2. **The model has to claim it found an answer**, in a JSON schema that forces it to
-   name a page and quote.
+2. **The answer has to be produced**, either by computing it from figures the issuer
+   tagged in its own filing, or by the model in a JSON schema that forces it to name
+   a page and quote.
 3. **The quote has to actually exist on the page it cites**, and any number in the
-   answer has to actually appear in that quote.
+   answer has to actually appear in that quote — or be re-derivable from figures that
+   do.
 
 Fail any one and the answer becomes "not found in this filing". The model's own
 confidence is never sufficient on its own — that's the entire point of step 3.
 
+### Figures are computed, not read out
+
+The single measured failure that shapes this system: asked for Activision's FY2019
+fixed-asset turnover, the model read revenue 6,489 and PP&E 253/282 correctly off
+two pages, averaged them correctly to 267.5, and then reported the quotient as
+**24.77** when it is **24.26**. Every input right, the division wrong.
+
+So a question that names a metric the system knows is **not** answered by the model.
+The figures come from the filing's own inline-XBRL tags (or, for older filings, from
+parsed statement rows), and the arithmetic happens in code, where it cannot be got
+wrong. The model is asked the same question *in parallel*, and the two answers are
+compared: agreement is recorded as corroboration, disagreement is logged and the
+computed figure ships. Questions that are genuinely prose — "what risks does the
+company disclose?" — still go to the model, which is what it is reliable at.
+
 When it does decline, click **Show what was checked** to see the passages it
 considered and how relevant they scored. A refusal you can inspect is far more
 useful than an opaque shrug.
+
+## Before you start: you need one API key
+
+**This is the only thing you must obtain yourself.** Generation is a hosted API
+call — there is no local language model to download or run — so the app cannot
+answer questions until a key is configured.
+
+Three values control it, all in `.env` at the repository root (copy
+`.env.example` to `.env` first):
+
+| Variable | What to put there |
+|---|---|
+| `LLM_API_KEY` | **Required.** Your key from the provider below. |
+| `LLM_BASE_URL` | The provider's OpenAI-compatible endpoint. |
+| `LLM_MODEL` | The model name as that provider spells it. |
+
+### Getting a free OpenRouter key (about two minutes)
+
+Any OpenAI-compatible provider works, but this is the one the app was tested on,
+and the model it was tested with costs nothing to use.
+
+**1. Create an account.** Go to <https://openrouter.ai> and sign up — Google,
+GitHub or email all work. **No payment card is required** for the free model
+used here.
+
+**2. Create a key.** Open <https://openrouter.ai/keys> and press **Create Key**.
+
+- *Name* — anything, e.g. `plutus-local`.
+- *Credit limit* — **leave it blank.** It caps spending on paid models; the
+  model below is free either way, and a limit of `0` can be rejected as
+  invalid rather than treated as "free only".
+
+**3. Copy it immediately.** The key is shown **once** and looks like
+`sk-or-v1-` followed by 64 hex characters. If you lose it, delete the key and
+make another — it cannot be displayed again.
+
+**4. Put it in `.env`.** From the repository root:
+
+```bash
+cp .env.example .env      # already points at the tested model
+```
+
+Then open `.env` and paste the key after `LLM_API_KEY=`. Nothing else needs
+changing — `.env.example` already carries the endpoint and model below.
+
+**5. Check it works.**
+
+```bash
+curl https://openrouter.ai/api/v1/auth/key -H "Authorization: Bearer sk-or-v1-..."
+```
+
+A JSON object with `"is_free_tier": true` means the key is live. In the running
+app the same check is in **Settings → Test connection**, which asks the model a
+real grounded question rather than merely pinging it — a reachable endpoint
+configured with a model name that does not exist is just as useless as an
+unreachable one.
+
+> **Why this model is free.** OpenRouter reports `minimax/minimax-m3:free` at
+> `prompt: 0` and `completion: 0` — zero cost per token, verified against their
+> models API, not assumed from the name. The `:free` suffix is what selects that
+> tier; drop it and you are on the paid variant of the same model.
+>
+> Free routing is rate-limited and shared, so expect occasional `429`s and slower
+> responses under load. The app retries short bursts automatically and reports a
+> genuine daily exhaustion as *"AI usage limit reached"* rather than failing
+> opaquely.
+
+**This exact configuration is what every published figure in this repository was
+measured on** — copy it verbatim and only replace the key:
+
+```bash
+# OpenRouter, MiniMax M3 free tier - the tested configuration
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=minimax/minimax-m3:free
+LLM_API_KEY=sk-or-v1-...        # <- paste your own key here
+```
+
+| | value |
+|---|---|
+| Provider | OpenRouter |
+| Endpoint | `https://openrouter.ai/api/v1` |
+| Model ID | `minimax/minimax-m3:free` — note the `:free` suffix, which selects the free tier |
+| Model page | <https://openrouter.ai/minimax/minimax-m3:free> |
+| Context window | 1M tokens |
+| Cost | Free (rate-limited; see the caveats below) |
+
+Alternatives, if you already have an account elsewhere: [Groq](https://console.groq.com)
+(`https://api.groq.com/openai/v1`) or
+[Google AI Studio](https://aistudio.google.com/apikey)
+(`https://generativelanguage.googleapis.com/v1beta/openai`). Both were tried;
+neither is what the published numbers come from.
+
+### For real accuracy, use a paid model
+
+The free tiers are genuinely usable, and **every accuracy figure in this
+repository was measured on one** — `minimax/minimax-m3:free`, the free tier on
+OpenRouter. Read those numbers as a floor rather than a ceiling. The free tier is
+also where the limits bite, measurably:
+
+- **Free endpoints are not deterministic.** Two identical 136-question evaluation
+  runs against `minimax/minimax-m3:free` — the free tier on OpenRouter, which is
+  what every published figure here was measured on — same inputs and
+  `temperature=0`, differed
+  on **16 questions** — six of them flipping from a safe refusal to a confidently
+  wrong answer. Free tiers load-balance across replicas that do not answer alike.
+- **They break under load.** Malformed JSON, `429`s and daily caps are routine.
+  The app retries and degrades honestly, but every retry is latency.
+- **Capability is the ceiling on prose questions.** Judgement questions ("is this
+  business cyclical?") are where a stronger model earns its cost.
+
+**A paid tier of a frontier model is the single highest-leverage change available
+to answer quality**, and it is a `.env` edit — no code changes:
+
+```bash
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_MODEL=anthropic/claude-sonnet-4.5      # or openai/gpt-5, google/gemini-3-pro
+LLM_API_KEY=sk-or-v1-...
+```
+
+One caveat worth stating plainly: a stronger model does **not** improve the
+computed figures, because those never go through a model. It improves the prose
+half.
 
 ## Quick start
 
@@ -44,22 +183,34 @@ useful than an opaque shrug.
 | **Windows** | `start.bat` |
 | **macOS** | `start.command` |
 
-It checks for Python 3.11+, Node 18+ and Docker, installs whatever is missing
-(winget on Windows, Homebrew on macOS), creates the virtual environment,
-installs both dependency trees, brings up Postgres and Qdrant, starts the app,
-waits until it actually answers, and opens your browser. It is idempotent —
-anything already present is detected and skipped, so a second run takes
-seconds. `stop.bat` / `stop.command` shut everything down without touching your
-data.
+On first launch, the script copies `.env.example` to `.env` and asks for an
+OpenRouter API key. It keeps the configured endpoint and
+`minimax/minimax-m3:free` model unchanged. Press Enter to skip the prompt and add
+the key to `.env` later.
 
-If you have no API key it will offer to save one; keys are free from
-[Google AI Studio](https://aistudio.google.com/apikey) (generous free tier) or
-[Groq](https://console.groq.com) (fast, smaller free tier). Any
-OpenAI-compatible endpoint works — including a self-hosted vLLM or Ollama — by
-setting `LLM_BASE_URL` and `LLM_MODEL`.
+### What gets installed
+
+The script installs anything missing — you do **not** need to install Docker, or
+anything else, by hand:
+
+| Software | Why | Installed by the script? |
+|---|---|---|
+| **Python 3.11+** | Runs the backend | Yes — winget (Windows) / Homebrew (macOS) |
+| **Node 18+** | Builds and serves the UI | Yes — same |
+| **Docker Desktop** | Runs Postgres and Qdrant | Yes — same. On Windows it may need one reboot before Docker can start. |
+| Postgres 16, Qdrant | Filings, history, vectors | Yes — pulled as containers, nothing installed on the host |
+| ONNX embedding + reranking models (~150MB) | Retrieval, in-process | Yes — downloaded on first backend start |
+
+It then creates the virtual environment, installs both dependency trees, brings up
+the containers, starts the app, waits until both services respond, and opens your
+browser. It is idempotent — anything already present is detected and skipped, so a
+second run takes seconds. If no API key is configured it offers to save one.
+`stop.bat` / `stop.command` shut everything down without touching your data.
 
 <details>
 <summary>Or set it up by hand</summary>
+
+Requires Python 3.11+, Node 18+ and Docker already installed.
 
 ```bash
 docker compose up -d                     # Postgres + Qdrant
@@ -67,16 +218,16 @@ cp .env.example .env                     # paste your key into LLM_API_KEY
 
 cd backend
 python -m venv .venv
-.venv/Scripts/activate                   # macOS/Linux: source .venv/bin/activate
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-python -m uvicorn app.main:app --port 8001
+python -m uvicorn app.main:app --port 7590
 
 cd ../frontend                           # new terminal
 npm install
 npm run dev
 ```
 
-Open the URL Vite prints. **There is no model server to start** — embeddings
+Open <http://localhost:7591>. **There is no model server to start** — embeddings
 and reranking run in-process; generation is a hosted API call.
 
 > The first backend start downloads two small ONNX models (~150MB total) and
@@ -84,50 +235,101 @@ and reranking run in-process; generation is a hosted API call.
 
 </details>
 
+### Ports
+
+One contiguous block, chosen because it is unassigned in `/etc/services` and clear
+of the crowded defaults (8000 is `irdmi`, 5432 is `postgresql`, and 5173 collides
+with every other Vite project on the machine):
+
+| Port | Service |
+|---|---|
+| **7590** | Backend API |
+| **7591** | Frontend (Vite) |
+| **7592** | Postgres (container-internal 5432) |
+| **7593** | Qdrant (container-internal 6333) |
+
+The dev server pins 7591 with `strictPort`, so a clash **fails loudly** instead of
+drifting to the next free port — a silent drift leaves the UI talking to nothing
+and looking merely empty.
+
 ## What you can do
 
 | | |
 |---|---|
 | **Add filings** | Drag a **PDF or HTML** filing (`.pdf`, `.htm`, `.html`) onto the sidebar or use *Add filing*. Live status while it indexes. |
-| **Ask questions** | Plain English. Answers carry an inline `p. N` citation chip. |
-| **Check the evidence** | Click any citation — now or from an old answer — and the source panel opens to that exact page with the quote shown, for PDF and HTML filings alike. |
+| **Ask questions** | Plain English. Answers carry an inline `p. N` chip for **every page the figure is reported on** — the statement, the MD&A discussion, a note — so you can check it wherever you prefer. |
+| **Check the evidence** | Click any citation — now or from an old answer — and the source panel opens to that exact page with the quote shown, for PDF and HTML filings alike. Page numbers are the ones **printed on the page**, not our internal count, so they match the document in your hand. |
 | **Organise** | Archive filings you're done with, or delete them. Delete is *soft*: the PDF and all history are kept and can be restored. |
 | **Search** | `⌘K` / `Ctrl K` jumps to a filing or finds anything you've asked before. |
-| **Sign in (optional)** | Everything works signed out. An account keeps your filings and history across devices, and lets you change your name and password. |
 | **Copy answers** | Copies the answer together with its citation and quote, ready to paste into a note. |
 | **Rate answers** | 👍/👎 on any answer, stored for later analysis. |
 
 ## Architecture
 
 ```
-React + Vite ──HTTP──▶ FastAPI ──┬──▶ Postgres   (filings, users, history)   [Docker]
-                                 ├──▶ Qdrant     (passage vectors)           [Docker]
-                                 ├──▶ fastembed  (embeddings + reranking)    [in-process]
-                                 └──▶ Gemini/Groq (answer generation)        [hosted API]
+React + Vite ──HTTP──▶ FastAPI ──┬──▶ Postgres    (filings and history)      [Docker]
+                                 ├──▶ Qdrant      (passage vectors)          [Docker]
+                                 ├──▶ fastembed   (embeddings + reranking)   [in-process]
+                                 ├──▶ finance/    (metric engine, fact store)[in-process]
+                                 └──▶ hosted LLM  (prose answers)            [API]
 ```
 
 **Nothing needs starting before the app except Docker.** This is deliberate: an
-earlier version ran a local model server, whose cold start took minutes on CPU and
-was the single largest source of operational risk. See `DESIGN_NOTES.md`.
+earlier version ran a local *generation* server, whose cold start took minutes on
+CPU and was the single largest source of operational risk. Generation is now always
+a hosted API call. The models that do run locally are the small ONNX embedding and
+reranking models, which load in seconds.
 
-### The RAG pipeline
+### The two paths
+
+A question is routed explicitly, and the answer records which path produced it —
+a reader is entitled to know whether a figure was computed from tagged data or
+read out of prose by a model, because those deserve different amounts of trust.
 
 ```
-ingest   PDF or HTML → pages (+tables) → passages (page-anchored, table-safe)
+ingest   PDF or HTML → pages → passages (page-anchored, table-safe)
               → batch embed → Qdrant + BM25 + page cache
+              → inline-XBRL facts (concept, value, period, page, segment axis)
 
 ask      question
-           ├─ BM25 top-25 ────┐
-           └─ vectors top-25 ─┴→ reciprocal rank fusion → 12 candidates
-           → cross-encoder rerank → best 8 passages
-           → [ambiguous? widen the pool and rerank again]
-           → [nothing relevant? stop here and decline]
-           → LLM (JSON-constrained)
-           → verification gate (quote on page? numbers in quote?)
-           → cited answer  |  "not found in this filing"
+           │
+           ├─ router: does this name a metric we can compute?
+           │
+           ├── YES ──▶ fact store → metric engine (arithmetic in code)
+           │            └─ runs in parallel with the model, then adjudicates:
+           │               agree → "corroborated" | differ → computed figure ships
+           │
+           └── NO ───▶ BM25 top-25 ─┐
+                       vectors ─────┴→ rank fusion → cross-encoder rerank → 8 passages
+                       → [+ statement pages the XBRL tags nominate]
+                       → [+ pages of the 10-K Item the question names]
+                       → [ambiguous? widen the pool and rerank again]
+                       → [nothing relevant? stop here and decline]
+                       → LLM (JSON-constrained, retried if the JSON is unreadable)
+           │
+           └──▶ verification gate (quote on page? numbers in quote or derivable?)
+                → cited answer, every page it is reported on
+                |  "not found in this filing"
 ```
 
 Why each piece is there:
+
+- **A financial ontology, not inference.** Analysts and filings use different words
+  for the same quantity: a question asks for "capital expenditure"; the cash-flow
+  statement says "Purchases of property, plant and equipment" and never contains
+  the phrase asked for. `app/finance/ontology.py` is a curated table of concepts,
+  US-GAAP tags, ~45 metric formulas and ~120 analyst phrasings — deliberately
+  explicit, so a wrong mapping can be found and corrected rather than being an
+  emergent property of a model.
+- **The issuer's own tags.** Since the SEC's inline-XBRL phase-in, filings carry
+  every reported figure twice: once as text, once as a tagged US-GAAP concept.
+  That is authoritative rather than inferred. Older filings carry no tags, so their
+  statements are located by how complete a page looks against the line items that
+  statement is made of — measured at 0.81 points/question against 0.83 for tagged
+  filings, so parsing is *not* the bottleneck.
+- **Parallel execution with adjudication.** Both paths run; the verifier decides.
+  Two independent derivations agreeing is stronger evidence than either alone, and
+  the disagreement case is the one worth catching.
 
 - **Hybrid retrieval.** BM25 catches exact financial vocabulary ("goodwill
   impairment", "SOFR"); vectors catch paraphrase. Neither alone is reliable.
@@ -137,8 +339,7 @@ Why each piece is there:
 - **Cross-encoder reranking.** Bi-encoders approximate relevance; a cross-encoder
   reads question and passage together. It's the largest single accuracy gain
   available, and its scores are *calibrated* — which is what makes the
-  answer/decline threshold meaningful rather than a magic number. Model choice was
-  benchmarked, not assumed: see `docs/BENCHMARKS.md`.
+  answer/decline threshold meaningful rather than a magic number.
 - **Adaptive escalation.** Most questions come back decisively relevant or
   decisively not. Only in the ambiguous middle — where a wrong call costs a point
   either way — does it widen the candidate pool and rerank again.
@@ -153,7 +354,8 @@ Why each piece is there:
 ### Running on different hardware
 
 The same build is expected on a thin laptop, a many-core server and a box with
-a dedicated GPU, so the local models are **sized from the machine at startup**
+a dedicated GPU, so the local embedding and reranking models (not the LLM, which
+is hosted) are **sized from the machine at startup**
 rather than to fixed constants (`backend/app/hardware.py`). `GET /health`
 reports what was chosen, which is usually the fastest explanation for why two
 machines running the same code differ in speed.
@@ -216,11 +418,17 @@ detected default is wrong for a particular box:
 backend/app/
   main.py          app factory + lifespan       config.py    settings
   exceptions.py    domain errors                domain/      models, enums
+  hardware.py      sizes the local models to the machine
   db/              session, migrations, repositories/
   storage/         filing file store (PDF or HTML)
-  ingestion/       parser (PDF), html_parser, chunker, embedder, pipeline
-  retrieval/       bm25_index, fusion, reranker, retriever, qdrant_store
-  qa/              llm_client, prompts, verifier, answer_service, chat_service
+  ingestion/       parser (PDF), html_parser, chunker, embedder, pipeline,
+                   xbrl_facts (inline-XBRL), page_labels (printed page numbers)
+  finance/         ontology (concepts, metrics, aliases), fact_store,
+                   metric_engine, multi_period, segment_engine
+  retrieval/       bm25_index, fusion, reranker, retriever, qdrant_store,
+                   fact_index (statement pages), section_index (10-K Items)
+  qa/              router (which path), llm_client, prompts, verifier,
+                   answer_service, chat_service
   api/             deps (DI), schemas (DTOs), errors, routes/
 ```
 
@@ -233,12 +441,14 @@ and one central place mapping domain errors to HTTP status codes.
 Everything is local — no object storage, no cloud services.
 
 ```
-storage/filings/{user_id|guest}/{filing_id}.pdf   uploaded originals   (host)
-storage/index/{filing_id}/{passages,pages}.json   BM25 + verifier caches (host)
-data/postgres-backup/                             pg_dump target       (host)
-data/sample/                                      evaluation fixture   (tracked)
-analyst_copilot_postgres                          Postgres data   (docker volume)
-analyst_copilot_qdrant                            vector storage  (docker volume)
+storage/filings/{user_id|guest}/{filing_id}.{pdf,htm}  uploaded originals  (host)
+storage/index/{filing_id}/passages.json           BM25 corpus            (host)
+storage/index/{filing_id}/pages.json              page text, for the verifier
+storage/index/{filing_id}/xbrl.json               concept -> pages, for retrieval
+storage/index/{filing_id}/facts.json              tagged values, for the engine
+data/postgres-backup/                             pg_dump target         (host)
+plutus_postgres                                   Postgres data   (docker volume)
+plutus_qdrant                                     vector storage  (docker volume)
 ```
 
 **Both datastores use Docker named volumes rather than host folders, and that is
@@ -268,54 +478,16 @@ All settings live in `.env` (see `.env.example`). The ones worth knowing:
 | Variable | Default | Notes |
 |---|---|---|
 | `LLM_API_KEY` | — | **Required.** Key for the configured endpoint. |
-| `LLM_MODEL` | `gemini-3.1-flash-lite` | Any model on the configured endpoint. |
-| `LLM_BASE_URL` | Gemini | Any OpenAI-compatible endpoint (Groq, Together, OpenRouter, vLLM…). |
-| `RELEVANCE_THRESHOLD` | `0.0` | Raise to decline more readily, lower to answer more readily. |
+| `LLM_MODEL` | `minimax/minimax-m3:free` | OpenRouter's **free** tier of MiniMax M3 — what the published figures were measured on. Any model on the configured endpoint works; a paid frontier model is the biggest available accuracy gain, see above. |
+| `LLM_BASE_URL` | OpenRouter | Any OpenAI-compatible endpoint (OpenRouter, Groq, Gemini, Together…). |
+| `USE_METRIC_ENGINE` | `true` | Compute named metrics in code instead of asking the model. Turning it off is a measurable accuracy loss. |
+| `RELEVANCE_THRESHOLD` | `-2.0` | Raise to decline more readily, lower to answer more readily. |
 | `ENRICH_FILINGS` | `true` | Company/period extraction + suggested questions. Costs two extra API calls per upload. |
 | `JWT_SECRET` | dev value | **Change for any non-local deployment.** |
 
 If the provider's usage limit is hit, short bursts are retried automatically and a
 genuine quota exhaustion is reported in the UI as *"AI usage limit reached"* with
 guidance, rather than a generic failure.
-
-## Tests
-
-```bash
-docker compose up -d          # tests use a dedicated analyst_copilot_test database
-cd backend
-python -m pytest tests/ -q
-```
-
-185 tests covering the parser (PDF and HTML), chunker, verifier,
-BM25/fusion/reranker/retriever, workspace isolation between accounts,
-answer service (every refusal path), repositories (including concurrency and soft
-delete), rate-limit handling, and the full HTTP API. Integration tests run against
-real Postgres, Qdrant and Groq rather than mocks — the seams between those are
-exactly where the real bugs live. They skip cleanly if a service isn't running.
-
-## Evaluating
-
-```bash
-cd backend && python scripts/eval.py
-```
-
-Runs the evaluation questions through the real pipeline — real parsing, retrieval,
-reranking, generation and verification — and scores them on the policy above.
-Current result on the bundled regression set: **+11/19** (12 answers correctly
-cited), with zero hallucinations on genuinely unanswerable questions.
-
-That set ships in `data/sample/` (two clearly fictional filings and 19 hand-written
-questions with known page/quote ground truth), so the published number is
-reproducible from a clean clone rather than taken on trust. Regenerate it with
-`python scripts/build_sample_data.py`, or point the eval at your own corpus:
-
-```bash
-python scripts/eval.py --questions path/to/eval-questions.jsonl --filings-dir path/to/filings
-python scripts/eval.py --local-vectors   # embedded Qdrant, no Docker needed
-```
-
-Run it before and after any change to chunking, retrieval or the verifier — it is
-the regression test that a unit test can't be.
 
 ## Known limitations
 
@@ -324,12 +496,21 @@ the regression test that a unit test can't be.
 - **HTML without page-break markers becomes one page.** A handful of filings — mostly
   8-Ks — carry no pagination at all, so the whole document is page 1. The citation is
   still honest, just less precise.
-- **One citation per answer.** A question needing synthesis across several pages
-  can't be fully cited yet, so it will usually decline instead.
-- **Repeated facts cost points.** Filings often state the same figure in both MD&A
-  prose and a financial table. Citing the "wrong" one of two truthful locations
-  scores 0 under the scoring policy — a property of how filings are written, not a
-  bug.
-- **Provider rate limits.** Groq's free tier is generous but finite; sustained use
-  will reach it. The app reports this clearly rather than failing opaquely. For
-  production volume, use a paid tier or a self-hosted endpoint.
+- **Custom formulas are refused, not computed.** If a question spells out a
+  definition the ontology does not model — "ROE defined as net income / (equity
+  less goodwill)" — the system declines rather than substituting its own formula.
+  That is deliberate (answering the wrong definition costs −1, refusing costs 0),
+  but an analyst with house definitions is not served yet. A small expression
+  evaluator over ontology concepts is the natural next step.
+- **The model cannot ask for clarification.** Generation is a single call: it
+  answers or reports "not found". A question missing a fiscal year is answered for
+  the most recent year in the filing rather than queried.
+- **Prose answers cannot be numerically verified.** "Boeing's business is
+  cyclical" contains no figure to check against a quote, so judgement questions
+  rest on retrieval quality and the model, not on the verification gate. This is
+  where a paid model pays for itself.
+- **Free-tier providers are non-deterministic.** Two identical runs differed on 16
+  of 136 questions. Computed figures are unaffected; prose answers are not.
+- **Existing filings do not pick up pipeline improvements.** Uploads are
+  de-duplicated by content hash, so a filing indexed before an ingestion change
+  keeps its old index. Delete and re-add it to re-index.

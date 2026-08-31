@@ -136,6 +136,16 @@ class HardwareProfile:
         return self.accelerator is not None
 
     @property
+    def shares_system_memory(self) -> bool:
+        """Whether the accelerator spends the same RAM the rest of the machine uses.
+
+        Apple silicon has one unified pool, so a buffer sized for a graphics
+        card comes straight out of what the OS and every other process needs.
+        A discrete card has its own VRAM and the trade is genuinely different.
+        """
+        return self.accelerator == "CoreMLExecutionProvider"
+
+    @property
     def onnx_threads(self) -> int | None:
         """Cores the ONNX sessions may use. None means "the library default".
 
@@ -157,11 +167,20 @@ class HardwareProfile:
     def embed_batch_size(self) -> int:
         """Passages per forward pass.
 
-        A GPU wants a large batch to be busy at all. On the CPU the batch
-        mostly costs memory, so it tracks what the machine has rather than
-        what it could theoretically hold.
+        A discrete GPU wants a large batch to be busy at all, and pays for it
+        out of its own VRAM. On the CPU the batch mostly costs memory, so it
+        tracks what the machine has rather than what it could theoretically
+        hold.
+
+        Apple silicon is neither: CoreML is a real accelerator, but it shares
+        one pool of memory with everything else on the machine, so a batch
+        sized for a discrete card is charged directly to system RAM.
+        Measured ingesting a 306-page 10-K on an M-series laptop, the
+        embedder peaked at **8.9GB** at batch 256 against **2.8GB** at 64 -
+        and the timings below say the curve is flat past 64 either way. Six
+        gigabytes for nothing, on the machine least able to spare it.
         """
-        if self.on_gpu:
+        if self.on_gpu and not self.shares_system_memory:
             return 256
         # Measured on a 12-core laptop: 8 -> 815ms/passage, 32 -> 733,
         # 64 -> 707, 256 -> 721. The curve is flat past 64, so there is

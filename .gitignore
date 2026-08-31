@@ -42,3 +42,14 @@ data/sample/analyst-copilot-data/
 # Run artifacts written by the benchmark and backup tooling.
 backend/perf_report.json
 data/postgres-backup/
+
+# Cached parsed/embedded filings for retrieval experiments (regenerable)
+backend/scripts/.exp_cache/
+backend/scripts/*_report*.json
+
+# Intermediate benchmark runs. Dozens accumulate while tuning and they are
+# regenerable from eval_financebench.py; only the two that DESIGN_NOTES cites
+# as evidence are kept.
+backend/scripts/eval_*.json
+!backend/scripts/eval_v4.json
+!backend/scripts/eval_groq.json

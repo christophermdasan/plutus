@@ -86,6 +86,97 @@ Zero hallucinations on genuinely unanswerable questions in every configuration.
    leniency for years that label an already-verified figure. Worth +1 on the eval,
    and the strict rule for money is unchanged.
 
+## Measured against the FinanceBench practice set
+
+The 136 practice questions over 78 real EDGAR filings are a much harder test
+than the bundled fictional set, and the first run was blunt about it: **-1
+out of 12** on a stratified sample, with the system abstaining 11 times. The
+scoring policy makes abstention safe, so the pipeline was not producing
+wrong answers - it was producing nothing.
+
+Tracing it rather than guessing found the cause in retrieval, not
+generation. In 6 of 6 refusals the page holding the answer **never reached
+the model at all**, and the reason is vocabulary: the question asks for
+"capital expenditure", 3M's cash-flow statement says "Purchases of property,
+plant and equipment (PP&E)", and the two share no term. BM25 has nothing to
+match; the page is a grid of numbers whose embedding carries little topical
+signal; the cross-encoder ranked the correct page **26th of 50**.
+
+| Configuration | Score |
+|---|---|
+| Baseline | -1/12 |
+| + verifier accepts computed metrics | 0/12 |
+| + query expansion, 20 context passages | **-2/12** |
+| + query expansion, 8 passages, tightened verifier | 0/12 |
+| Query expansion off | +1/12 |
+| + statement anchoring by reserving slots | **0/12** |
+| **+ statement anchoring by addition** | **+2/12** |
+
+Three of those rows are regressions, and they taught more than the gains.
+
+**A verifier that accepts computed metrics needs a small pool, not a large
+one.** A ratio the model computes correctly can never appear verbatim in a
+quote, so the check re-derives it from figures it has independently
+confirmed. Allowing it to derive from the whole retrieved context made it
+*vacuous*: n figures give ~n² pairs and ~n³ triples, so twenty passages
+cover the number line densely enough that almost any value "reconstructs" -
+and a wrong fixed-asset turnover of 24.67 passed where the true figure was
+24.26. Anchored instead to the figures the answer itself states and the
+quote it cited, the pool is a handful of numbers and the check is a real
+audit of the arithmetic.
+
+**More context made answers worse, not better.** At 8 passages the model
+answered that question by showing its inputs ("revenue $6,489M, average PP&E
+$267.5M, ratio 24.26"); at 20 it asserted a bare, wrong "24.67". Dilution
+does not just add noise - it changes the *shape* of the answer, away from
+derivations the verifier can check and toward assertions it cannot.
+
+**Widening recall for the questions that fail narrowed it for the ones that
+worked.** Query expansion did exactly what it was designed to do, moving the
+capex page from rank 26 to rank 4, and still cost a point: the added terms
+shift the query embedding enough to change retrieval for questions that were
+already succeeding. It is kept behind `expand_queries`, off by default.
+
+**Anchoring must add, never displace.** Locating the statement pages
+directly - by inline XBRL where the issuer tagged the figures, and otherwise
+by scoring each page against the line items a statement is *made of* -
+nominates the right page for 7 of 7 questions tested, on tagged and untagged
+filings alike. But seating those pages by *reserving* slots evicted
+passages the answer needed: a fixed-asset-turnover question needs PP&E from
+the balance sheet and revenue from the income statement, and evicting three
+reranked passages to seat the former threw out the latter, turning a correct
+answer into an abstention. Appending the same pages instead, only when
+retrieval missed them, took the score to +2 - the first configuration to
+beat doing nothing by more than one question.
+
+The general lesson across all three: **an intervention that changes what the
+model sees for questions that already work has to earn back what it breaks.**
+Two of the three did not, and only measurement distinguished them - each
+looked equally sound in principle.
+
+### Locating a statement without XBRL
+
+52 of the 78 filings carry inline XBRL, covering 82% of the questions; for
+those, `us-gaap:PaymentsToAcquirePropertyPlantAndEquipment` *is* capital
+expenditure, stated by the issuer. The other 26 - pre-2019 10-Ks and most
+8-Ks - carry no tags, so structure is recovered from the text.
+
+Not by heading: "consolidated statement of cash flows" appears in tables of
+contents, cross-references and MD&A prose. By **completeness** - scoring each
+page against the line items the statement is composed of. On 3M's FY2018
+10-K three pages quote the capex figure and only one is the statement:
+
+| Page | Content | Canonical items matched |
+|---|---|---|
+| 46 | MD&A cash-flow discussion | 5/8 |
+| 49 | Free-cash-flow table | 5/8 |
+| **60** | **The statement itself** | **8/8** |
+
+Page 60 is the page the answer key names. The same signal survives filers
+wording line items differently - Best Buy's balance sheet says "Merchandise
+inventories", not "Inventories, net" - because the statement a figure
+belongs to is structural where its label is not.
+
 ## The largest lesson: model *load* time, not inference time
 
 A chat request hung for minutes. Reading the model server's own logs, rather than

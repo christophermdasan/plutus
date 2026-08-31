@@ -52,6 +52,14 @@ export function SourceDrawer({
   const atStart = page <= 1;
   const atEnd = maxPage !== null && page >= maxPage;
 
+  // Citation chips show the number printed on the page, so the navigator
+  // has to as well - one view showing "p. 159" beside "161 / 306" reads as
+  // a bug. The offset is a property of the filing's front matter, constant
+  // across it, so it carries while paging.
+  const offset =
+    source.label != null ? source.label - source.page : 0;
+  const printed = (n: number) => (n + offset >= 1 ? n + offset : n);
+
   return (
     <aside
       className={`slide-in-right relative flex h-full shrink-0 flex-col border-l ${
@@ -89,8 +97,8 @@ export function SourceDrawer({
             <IconChevronLeft />
           </IconButton>
           <span className="tabular px-1 text-[12px] whitespace-nowrap" style={{ color: "var(--color-ink-muted)" }}>
-            {page}
-            {maxPage ? ` / ${maxPage}` : ""}
+            {printed(page)}
+            {maxPage ? ` / ${printed(maxPage)}` : ""}
           </span>
           <IconButton label="Next page" disabled={atEnd} onClick={() => setPage((p) => (p ?? 1) + 1)}>
             <IconChevronRight />
@@ -118,7 +126,7 @@ export function SourceDrawer({
           “{source.quote}”
         </blockquote>
         <p className="tabular mt-2 text-[11px]" style={{ color: "var(--color-ink-faint)" }}>
-          Quoted from page {source.page}
+          Quoted from page {printed(source.page)}
         </p>
       </div>
       )}

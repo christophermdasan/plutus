@@ -20,8 +20,8 @@ $ErrorActionPreference = 'Stop'
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$BackendPort  = 8001
-$FrontendPort = 5173
+$BackendPort  = 7590
+$FrontendPort = 7591
 $RunDir = Join-Path $Root '.run'
 if (-not (Test-Path $RunDir)) { New-Item -ItemType Directory -Path $RunDir | Out-Null }
 
@@ -76,10 +76,23 @@ function Stop-All {
       Remove-Item $pidFile -Force -ErrorAction SilentlyContinue
     }
   }
-  # Anything still holding the ports, e.g. a server started by hand.
-  Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
-    Where-Object { $_.LocalPort -in $BackendPort, $FrontendPort } |
-    ForEach-Object { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+
+  # PID files may be stale/missing, and cmd/npm can leave Vite running after
+  # its parent exits. Stop anything still holding Plutus's application ports.
+  $listeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.LocalPort -in $BackendPort, $FrontendPort })
+  foreach ($listener in $listeners) {
+    Stop-Process -Id $listener.OwningProcess -Force -ErrorAction SilentlyContinue
+    Write-Ok "stopped process listening on port $($listener.LocalPort) (pid $($listener.OwningProcess))"
+  }
+
+  Start-Sleep -Milliseconds 250
+  $remaining = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+    Where-Object { $_.LocalPort -in $BackendPort, $FrontendPort })
+  if ($remaining.Count -gt 0) {
+    $ports = ($remaining.LocalPort | Sort-Object -Unique) -join ', '
+    Die "Could not stop the process listening on port(s): $ports."
+  }
 
   if (Test-Command docker) {
     docker info 2>$null | Out-Null
@@ -184,27 +197,24 @@ function Initialize-Env {
   Write-Warn 'No LLM API key set yet.'
   Write-Host @'
 
-  Plutus answers questions with a hosted model. Get a free key from either:
+  Plutus answers questions with OpenRouter's free MiniMax M3 model.
 
-    Google AI Studio   https://aistudio.google.com/apikey     (generous free tier)
-    Groq               https://console.groq.com               (fast, smaller free tier)
+    Create a key   https://openrouter.ai/keys
+    Model          minimax/minimax-m3:free
 
 '@
-  $key = Read-Host '  Paste your API key (or press Enter to skip and add it later)'
+  $key = Read-Host '  Paste your OpenRouter API key (or press Enter to skip)'
   if ([string]::IsNullOrWhiteSpace($key)) {
     Write-Warn 'Skipped. Add LLM_API_KEY to .env before asking questions.'
     return
   }
 
-  if ($key.StartsWith('gsk_')) {
-    $base = 'https://api.groq.com/openai/v1'; $model = 'openai/gpt-oss-120b'
+  # Keep the OpenRouter endpoint and MiniMax model copied from .env.example;
+  # entering a key must not silently switch providers.
+  if ($content -match '(?m)^LLM_API_KEY=') {
+    $content = $content -replace '(?m)^LLM_API_KEY=.*$', "LLM_API_KEY=$key"
   } else {
-    $base = 'https://generativelanguage.googleapis.com/v1beta/openai/'; $model = 'gemini-3.1-flash-lite'
-  }
-  foreach ($pair in @(@('LLM_API_KEY', $key), @('LLM_BASE_URL', $base), @('LLM_MODEL', $model))) {
-    $name, $value = $pair
-    if ($content -match "(?m)^$name=") { $content = $content -replace "(?m)^$name=.*$", "$name=$value" }
-    else { $content += "`n$name=$value`n" }
+    $content += "`nLLM_API_KEY=$key`n"
   }
   # UTF8Encoding($false): Set-Content -Encoding utf8 writes a BOM on Windows
   # PowerShell 5.1, and a BOM in a dotenv file is read as part of the first
@@ -251,7 +261,7 @@ print(accel[0] if accel else '')" 2>$null
   } elseif ($gpus -match 'AMD|Radeon|Intel Arc') {
     Write-Warn 'An AMD/Intel GPU is present but the CPU runtime is installed.'
     Write-Info 'On Windows these need DirectML:  pip install onnxruntime-directml'
-    Write-Info 'See backendequirements-accelerate.txt'
+    Write-Info 'See backend\requirements-accelerate.txt'
   }
 }
 

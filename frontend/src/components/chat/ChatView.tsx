@@ -46,17 +46,27 @@ const FALLBACK_SUGGESTIONS = [
 /** The citation chip: the product's core promise, inline where the claim is. */
 function Citation({
   page,
+  label,
   active,
   onClick,
 }: {
   page: number;
+  label?: number | null;
   active: boolean;
   onClick: () => void;
 }) {
+  // The number printed on the page, which is what a reader can match in
+  // their own copy. It runs behind the sequential index on a filing whose
+  // front matter is counted but not numbered.
+  const shown = label ?? page;
   return (
     <button
       onClick={onClick}
-      title={`Open page ${page} in the filing`}
+      title={
+        shown === page
+          ? `Open page ${page} in the filing`
+          : `Open printed page ${shown} (sheet ${page}) in the filing`
+      }
       className="tabular ml-1.5 inline-flex translate-y-[-1px] items-center gap-1 rounded-md px-1.5 py-0.5
         text-[11px] font-medium leading-none transition-colors"
       style={{
@@ -64,7 +74,7 @@ function Citation({
         color: active ? "#fff" : "var(--color-accent-ink)",
       }}
     >
-      <IconCheck size={10} />p.&nbsp;{page}
+      <IconCheck size={10} />p.&nbsp;{shown}
     </button>
   );
 }
@@ -85,35 +95,59 @@ function AnswerCard({
   filing: Filing;
 }) {
   const result = turn.result!;
-  const isActive =
-    activeSource?.page === result.page && activeSource?.filingId === filing.id;
+
+  // The same figure is usually printed in more than one place, and each is
+  // a truthful citation. All of them get a chip so the reader can check the
+  // number against the statement, the MD&A or a note as they prefer. Older
+  // answers stored before citations were persisted carry only page/quote,
+  // so that is the fallback rather than showing nothing.
+  const citations =
+    result.citations?.length > 0
+      ? result.citations
+      : result.page != null
+        ? [{ page: result.page, quote: result.quote }]
+        : [];
 
   return (
     <div className="max-w-[46rem]">
       <p className="text-[15px] leading-[1.7]" style={{ color: "var(--color-ink)" }}>
         {result.answer}
-        <Citation
-          page={result.page!}
-          active={isActive}
-          onClick={() =>
-            onOpenSource({
-              filingId: filing.id,
-              filingName: filing.display_title,
-              page: result.page!,
-              quote: result.quote,
-              question: turn.question,
-              answer: result.answer,
-            })
-          }
-        />
+        {citations.map((citation, index) => (
+          <Citation
+            key={`${citation.page}-${index}`}
+            page={citation.page}
+            label={citation.label}
+            active={
+              activeSource?.page === citation.page && activeSource?.filingId === filing.id
+            }
+            onClick={() =>
+              onOpenSource({
+                filingId: filing.id,
+                filingName: filing.display_title,
+                page: citation.page,
+                label: citation.label,
+                quote: citation.quote,
+                question: turn.question,
+                answer: result.answer,
+              })
+            }
+          />
+        ))}
       </p>
 
       <blockquote
         className="mt-3 rounded-r-md border-l-[3px] py-1.5 pl-3 pr-2 text-[13px] italic leading-relaxed"
         style={{ borderColor: "var(--color-verified)", color: "var(--color-ink-muted)" }}
       >
-        “{result.quote}”
+        “{citations[0]?.quote ?? result.quote}”
       </blockquote>
+
+      {citations.length > 1 && (
+        <p className="mt-1.5 text-[11px]" style={{ color: "var(--color-ink-faint)" }}>
+          Also reported on {citations.length - 1} other{" "}
+          {citations.length === 2 ? "page" : "pages"} — click any chip to check it there.
+        </p>
+      )}
 
       <div className="mt-2.5 flex items-center gap-1">
         <Badge tone="verified">
@@ -245,7 +279,8 @@ export function ChatView({
     inputRef.current?.focus();
   }, [filing?.id]);
 
-  const canAsk = filing?.status === "ready";
+  const asking = turns.some((turn) => turn.pending);
+  const canAsk = filing?.status === "ready" && !asking;
 
   function submit(question?: string) {
     const q = (question ?? draft).trim();
@@ -465,6 +500,8 @@ export function ChatView({
               placeholder={
                 !filing
                   ? "Select a filing first"
+                  : asking
+                    ? "Reading the filing…"
                   : !canAsk
                     ? `${filing.status_label}…`
                     : "Ask about this filing…"

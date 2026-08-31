@@ -50,6 +50,19 @@ _BLOCK_TAGS = {
 }
 
 
+def _is_xbrl_metadata(tag) -> bool:
+    """Inline-XBRL declarations, which are markup rather than filing text.
+
+    Names are lowercased because BeautifulSoup's html.parser normalises them
+    and filers are inconsistent about capitalisation.
+    """
+    name = (tag.name or "").lower()
+    return (
+        name in {"ix:header", "ix:hidden", "ix:references", "ix:resources"}
+        or name.startswith(("xbrli:", "xbrldi:", "link:", "xlink:"))
+    )
+
+
 def _decode(path: Path) -> str:
     """EDGAR HTML predates consistent charset declarations."""
     data = path.read_bytes()
@@ -103,6 +116,23 @@ def _page_text(fragment: str) -> str:
     soup = BeautifulSoup(fragment, "html.parser")
 
     for tag in soup(["script", "style"]):
+        tag.decompose()
+
+    # The inline-XBRL header, which is markup for machines and is never shown
+    # to a reader: concept names, entity identifiers and period strings run
+    # together without spaces. It sits at the top of the document, so
+    # extracted as prose it all lands on page 1 - 458 `us-gaap:` occurrences
+    # on AMD's FY22 10-K, 2,835 on JPMorgan's. That poisons BM25 with
+    # thousands of junk tokens, and it can be quoted back as evidence: AMD's
+    # customer-concentration question was answered with the quote
+    # "us-gaap:RevenueFromContractWithCustomerMemberamd:CustomerAMember...",
+    # which passed verification honestly, because the text really was on the
+    # page, and told the reader nothing at all.
+    #
+    # The facts themselves are read separately and authoritatively by
+    # `xbrl_facts.py`, straight from the source markup, so nothing is lost by
+    # keeping this out of the text.
+    for tag in soup.find_all(_is_xbrl_metadata):
         tag.decompose()
 
     # Serialised before the prose pass, which would otherwise flatten them.

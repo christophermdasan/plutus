@@ -24,6 +24,8 @@ from app.domain.models import Passage
 from app.exceptions import IngestionError
 from app.ingestion.chunker import chunk_pages
 from app.ingestion.parser import parse_document
+from app.ingestion.xbrl_facts import Fact as XbrlFact
+from app.ingestion.xbrl_facts import extract_from_file
 from app.qa import prompts
 
 logger = logging.getLogger(__name__)
@@ -71,6 +73,102 @@ class IngestionPipeline:
             json.dumps({str(i + 1): text for i, text in enumerate(pages)}), encoding="utf-8"
         )
 
+    def _write_xbrl(self, filing_id: str, source_path: Path) -> None:
+        """Persist which pages carry which tagged US-GAAP concept.
+
+        Extracted at ingest rather than per question: it is a scan of the
+        source markup, so doing it once here keeps it off the path a user
+        waits on. Absent for the filings that predate the SEC's inline-XBRL
+        phase-in, where the fact index locates statements from their line
+        items instead - so a missing or unreadable file is not an error.
+        """
+        pages: dict[str, list[int]] = {}
+        try:
+            for fact in extract_from_file(source_path):
+                slot = pages.setdefault(fact.local_name, [])
+                if fact.page not in slot:
+                    slot.append(fact.page)
+        except Exception:
+            logger.warning("XBRL extraction failed for %s", filing_id, exc_info=True)
+            return
+
+        if pages:
+            (self._index_dir(filing_id) / "xbrl.json").write_text(
+                json.dumps(pages), encoding="utf-8"
+            )
+
+    def load_xbrl_pages(self, filing_id: str) -> dict[str, list[int]]:
+        path = self._index_dir(filing_id) / "xbrl.json"
+        if not path.exists():
+            return {}
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_facts(self, filing_id: str, source_path: Path) -> None:
+        """Persist the tagged facts themselves, not just which page they sit on.
+
+        `xbrl.json` records concept -> pages, which is all retrieval needs to
+        nominate a statement page. The deterministic engine needs the
+        *values*, their periods and their scale to compute anything, and
+        re-parsing the source markup on every question would put a full
+        document scan on the path a user waits on.
+        """
+        try:
+            facts = extract_from_file(source_path)
+        except Exception:
+            logger.warning("XBRL fact extraction failed for %s", filing_id, exc_info=True)
+            return
+        if not facts:
+            return
+        (self._index_dir(filing_id) / "facts.json").write_text(
+            json.dumps([
+                {
+                    "concept": f.concept,
+                    "value": f.value,
+                    "period_end": f.period_end,
+                    "period_start": f.period_start,
+                    "page": f.page,
+                    "member": f.member,
+                    # Without the axis a reloaded segment fact cannot be told
+                    # from a geographical one, and "which segment had the
+                    # highest net income" answers with a region.
+                    "axis": f.axis,
+                }
+                for f in facts
+            ]),
+            encoding="utf-8",
+        )
+
+    def load_facts(self, filing_id: str) -> list[XbrlFact]:
+        """The tagged facts for a filing, or an empty list.
+
+        Empty is a normal outcome, not an error: 26 of the 78 filings in the
+        practice corpus predate the SEC's inline-XBRL phase-in and carry no
+        tags at all. `fact_store.build` falls back to parsing statement lines
+        out of the page text for those.
+        """
+        path = self._index_dir(filing_id) / "facts.json"
+        if not path.exists():
+            return []
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+        return [
+            XbrlFact(
+                concept=item["concept"],
+                value=item["value"],
+                period_end=item["period_end"],
+                period_start=item["period_start"],
+                page=item["page"],
+                member=item.get("member", ""),
+                axis=item.get("axis", ""),
+            )
+            for item in raw
+        ]
+
     def load_index(self, filing_id: str) -> tuple[list[Passage], dict[int, str]]:
         directory = self._index_dir(filing_id)
         passages_raw = json.loads((directory / "passages.json").read_text(encoding="utf-8"))
@@ -108,6 +206,8 @@ class IngestionPipeline:
             self._vectors.delete_filing(filing_id)
             self._vectors.add_passages(passages, embeddings)
             self._write_index(filing_id, passages, pages)
+            self._write_xbrl(filing_id, source_path)
+            self._write_facts(filing_id, source_path)
 
             self._filings.update_status(
                 filing_id, FilingStatus.READY, num_pages=len(pages)

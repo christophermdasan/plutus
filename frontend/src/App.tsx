@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ApiError,
-  auth as authApi,
-  chat as chatApi,
-  filings as filingsApi,
-} from "./lib/api";
+import { ApiError, chat as chatApi, filings as filingsApi } from "./lib/api";
 import { useLocalStorage } from "./lib/hooks/useLocalStorage";
 import { useResizable } from "./lib/hooks/useResizable";
 import { useTheme } from "./lib/hooks/useTheme";
 import { ToastProvider, useToast } from "./lib/hooks/useToast";
-import { ACTIVE_STATUSES, type Filing, type Message, type SourceRef, type User } from "./lib/types";
+import { ACTIVE_STATUSES, type Filing, type Message, type SourceRef } from "./lib/types";
 import { CommandPalette } from "./components/CommandPalette";
 import { ChatView, type Turn } from "./components/chat/ChatView";
 import { FilingMenu } from "./components/filings/FilingMenu";
 import { Sidebar } from "./components/layout/Sidebar";
 import { SourceDrawer } from "./components/source/SourceDrawer";
-import { AuthDialog } from "./components/settings/AuthDialog";
 import { SettingsDialog } from "./components/settings/SettingsDialog";
 import { Button, Dialog, Input, Label } from "./components/ui";
 
@@ -32,18 +26,18 @@ function AppInner() {
   const [sessionByFiling, setSessionByFiling] = useState<Record<string, number>>({});
   const [source, setSource] = useState<SourceRef | null>(null);
 
-  const [user, setUser] = useState<User | null>(null);
   const [uploading, setUploading] = useState(false);
   const [collapsed, setCollapsed] = useLocalStorage("sidebar_collapsed", false);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [authOpen, setAuthOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [menu, setMenu] = useState<{ filing: Filing; anchor: DOMRect } | null>(null);
   const [renaming, setRenaming] = useState<Filing | null>(null);
   const [renameValue, setRenameValue] = useState("");
 
   const pollRef = useRef<number | null>(null);
+  const selectedIdRef = useRef<string | null>(null);
+  const pendingFilingsRef = useRef(new Set<string>());
 
   // Panel widths are a working preference - an analyst comparing a wide table
   // wants the document larger; one reading a long answer wants it smaller.
@@ -107,15 +101,17 @@ function AppInner() {
       const firstReady = list.find((f) => f.status === "ready");
       if (firstReady) setSelectedId(firstReady.id);
     });
-    authApi.me().then(setUser).catch(() => setUser(null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     refresh();
-    setSelectedId(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [view]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   /*
    * Poll the documents that are actually indexing, and only those.
@@ -218,6 +214,10 @@ function AppInner() {
               answer: m.answer,
               page: m.page,
               quote: m.quote,
+              // Reloaded history offers the same alternate locations the
+              // live answer did. `?? []` guards the rows written before
+              // citations were stored, which carry only page and quote.
+              citations: m.citations ?? [],
               reason: m.reason,
               considered: [],
               latency_ms: m.latency_ms,
@@ -238,6 +238,7 @@ function AppInner() {
       const filing = await filingsApi.upload(file);
       if (view === "archive") setView("active");
       await refresh(false);
+      setSource(null);
       setSelectedId(filing.id);
       toast(`Added ${filing.original_name}`, "success");
     } catch (err) {
@@ -250,7 +251,10 @@ function AppInner() {
   async function handleAsk(question: string) {
     if (!selectedId) return;
     const filingId = selectedId;
+    if (pendingFilingsRef.current.has(filingId)) return;
+    pendingFilingsRef.current.add(filingId);
     const turnId = crypto.randomUUID();
+    const filingName = selected?.display_title ?? filingId;
 
     setTurnsByFiling((prev) => ({
       ...prev,
@@ -272,11 +276,15 @@ function AppInner() {
 
       // Open the source automatically for a verified answer - seeing the
       // evidence is the point of the product.
-      if (result.found && result.page && selected) {
+      if (result.found && result.page && selectedIdRef.current === filingId) {
         setSource({
           filingId,
-          filingName: selected.display_title,
+          filingName,
           page: result.page,
+          // The printed page number, so the panel agrees with the chips.
+          // Without it the drawer showed the internal index beside a chip
+          // reading two lower, which looks like a bug in the citation.
+          label: result.citations?.[0]?.label,
           quote: result.quote,
           question,
           answer: result.answer,
@@ -292,6 +300,8 @@ function AppInner() {
         },
       });
       if (rateLimited) toast("AI usage limit reached — try again shortly", "error");
+    } finally {
+      pendingFilingsRef.current.delete(filingId);
     }
   }
 
@@ -314,7 +324,12 @@ function AppInner() {
   async function handleCopy(turn: Turn) {
     if (!turn.result) return;
     const { answer, page, quote } = turn.result;
-    const text = `Q: ${turn.question}\nA: ${answer}\n\nSource: ${selected?.display_title ?? ""}, page ${page}\n"${quote}"`;
+    const citation =
+      turn.result.citations?.find((candidate) => candidate.page === page) ??
+      turn.result.citations?.[0];
+    const shownPage = citation?.label ?? page;
+    const shownQuote = citation?.quote ?? quote;
+    const text = `Q: ${turn.question}\nA: ${answer}\n\nSource: ${selected?.display_title ?? ""}, page ${shownPage}\n"${shownQuote}"`;
     try {
       await navigator.clipboard.writeText(text);
       toast("Answer copied with citation", "success");
@@ -324,14 +339,20 @@ function AppInner() {
   }
 
   async function openAnswerFromSearch(message: Message) {
-    const filing = filings.find((f) => f.id === message.session_id.toString()) ?? null;
     // Search results carry a session, not a filing; look the filing up via
     // its session so the drawer can open on the right document.
     try {
       const sessions = await chatApi.sessions();
       const session = sessions.find((s) => s.id === message.session_id);
-      const target = session ? filings.find((f) => f.id === session.filing_id) : filing;
-      if (!target) return;
+      if (!session) throw new Error("The filing for that answer is no longer available.");
+      const target =
+        filings.find((f) => f.id === session.filing_id) ??
+        (await filingsApi.get(session.filing_id));
+      const targetView = target.is_archived ? "archive" : "active";
+      if (targetView !== view) {
+        setView(targetView);
+        await refresh(target.is_archived);
+      }
 
       setSelectedId(target.id);
       if (message.found && message.page) {
@@ -339,47 +360,69 @@ function AppInner() {
           filingId: target.id,
           filingName: target.display_title,
           page: message.page,
+          label: message.citations?.[0]?.label,
           quote: message.quote,
           question: message.question,
           answer: message.answer,
         });
       }
-    } catch {
-      /* ignore */
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't open that answer.", "error");
     }
   }
 
   async function archiveFiling(filing: Filing) {
-    await filingsApi.archive(filing.id);
-    await refresh();
-    if (selectedId === filing.id) setSelectedId(null);
-    toast(`Archived ${filing.display_title}`);
+    try {
+      await filingsApi.archive(filing.id);
+      await refresh();
+      if (selectedId === filing.id) {
+        setSelectedId(null);
+        setSource(null);
+      }
+      toast(`Archived ${filing.display_title}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't archive that filing.", "error");
+    }
   }
 
   async function unarchiveFiling(filing: Filing) {
-    await filingsApi.unarchive(filing.id);
-    await refresh();
-    toast(`Restored ${filing.display_title}`);
+    try {
+      await filingsApi.unarchive(filing.id);
+      await refresh();
+      toast(`Restored ${filing.display_title}`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't restore that filing.", "error");
+    }
   }
 
   async function deleteFiling(filing: Filing) {
-    await filingsApi.remove(filing.id);
-    await refresh();
-    if (selectedId === filing.id) {
-      setSelectedId(null);
-      setSource(null);
+    try {
+      await filingsApi.remove(filing.id);
+      await refresh();
+      if (selectedId === filing.id) {
+        setSelectedId(null);
+        setSource(null);
+      }
+      // Soft delete: say so, so nobody thinks their document is gone.
+      toast(`Deleted ${filing.display_title} — the file is kept and can be restored`);
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't delete that filing.", "error");
     }
-    // Soft delete: say so, so nobody thinks their document is gone.
-    toast(`Deleted ${filing.display_title} — the file is kept and can be restored`);
   }
 
   async function submitRename() {
     if (!renaming) return;
-    await filingsApi.rename(renaming.id, renameValue.trim());
-    setRenaming(null);
-    await refresh();
-    toast("Renamed");
+    try {
+      await filingsApi.rename(renaming.id, renameValue.trim());
+      setRenaming(null);
+      await refresh();
+      toast("Renamed");
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Couldn't rename that filing.", "error");
+    }
   }
+
+  const sourceFiling = filings.find((filing) => filing.id === source?.filingId) ?? null;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden">
@@ -388,7 +431,6 @@ function AppInner() {
         selectedId={selectedId}
         collapsed={collapsed}
         uploading={uploading}
-        user={user}
         view={view}
         theme={theme}
         width={sidebarResize.width}
@@ -401,15 +443,17 @@ function AppInner() {
         }}
         onUpload={handleUpload}
         onHome={goHome}
-        // Settings holds appearance and connection, neither of which needs an
-        // account, so it opens for everyone. Only the account row asks you to
-        // sign in - conflating the two is what made the theme control
-        // unreachable while signed out.
         onOpenSettings={() => setSettingsOpen(true)}
-        onOpenAccount={() => (user ? setSettingsOpen(true) : setAuthOpen(true))}
         onCycleTheme={cycleTheme}
         onOpenSearch={() => setPaletteOpen(true)}
-        onSetView={setView}
+        onSetView={(nextView) => {
+          // Switching between the active library and Archive replaces the
+          // filing context, just like returning home. Keep a source drawer
+          // from outliving the filing it was opened for.
+          setSelectedId(null);
+          setSource(null);
+          setView(nextView);
+        }}
         onFilingMenu={(filing, anchor) => setMenu({ filing, anchor })}
       />
 
@@ -429,8 +473,8 @@ function AppInner() {
 
       <SourceDrawer
         source={source}
-        maxPage={selected?.num_pages ?? null}
-        mediaKind={selected?.media_kind ?? "pdf"}
+        maxPage={sourceFiling?.num_pages ?? null}
+        mediaKind={sourceFiling?.media_kind ?? "pdf"}
         width={drawerResize.width}
         resizing={drawerResize.dragging}
         onResizeStart={drawerResize.onPointerDown}
@@ -472,28 +516,9 @@ function AppInner() {
 
       <SettingsDialog
         open={settingsOpen}
-        user={user}
         theme={theme}
         onClose={() => setSettingsOpen(false)}
         onThemeChange={setTheme}
-        onUserChange={(u) => {
-          setUser(u);
-          if (!u) setSettingsOpen(false);
-        }}
-      />
-
-      <AuthDialog
-        open={authOpen}
-        onClose={() => setAuthOpen(false)}
-        onAuthenticated={(u) => {
-          setUser(u);
-          setAuthOpen(false);
-          // A signed-in user has their own workspace; reload into it.
-          setTurnsByFiling({});
-          setSelectedId(null);
-          refresh();
-          toast(`Signed in as ${u.display_name}`, "success");
-        }}
       />
 
       <CommandPalette

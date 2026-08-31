@@ -1,6 +1,6 @@
 import { useRef, useState, type DragEvent } from "react";
 import type { Theme } from "../../lib/hooks/useTheme";
-import type { Filing, User } from "../../lib/types";
+import type { Filing } from "../../lib/types";
 import { ACTIVE_STATUSES } from "../../lib/types";
 import { Badge, EmptyHint, IconButton, ResizeHandle, Spinner } from "../ui";
 import {
@@ -14,7 +14,6 @@ import {
   IconSearch,
   IconSettings,
   IconSun,
-  IconUser,
 } from "../ui/icons";
 
 interface Props {
@@ -22,7 +21,6 @@ interface Props {
   selectedId: string | null;
   collapsed: boolean;
   uploading: boolean;
-  user: User | null;
   view: "active" | "archive";
   theme: Theme;
   width: number;
@@ -33,7 +31,6 @@ interface Props {
   onUpload: (file: File) => void;
   onHome: () => void;
   onOpenSettings: () => void;
-  onOpenAccount: () => void;
   onCycleTheme: () => void;
   onOpenSearch: () => void;
   onSetView: (view: "active" | "archive") => void;
@@ -70,7 +67,6 @@ export function Sidebar({
   selectedId,
   collapsed,
   uploading,
-  user,
   view,
   theme,
   width,
@@ -81,7 +77,6 @@ export function Sidebar({
   onUpload,
   onHome,
   onOpenSettings,
-  onOpenAccount,
   onCycleTheme,
   onOpenSearch,
   onSetView,
@@ -311,33 +306,7 @@ export function Sidebar({
         className={`border-t p-2 ${collapsed ? "flex flex-col items-center gap-1" : "flex items-center gap-1"}`}
         style={{ borderColor: "var(--color-border)" }}
       >
-        <button
-          onClick={onOpenAccount}
-          title={user ? user.display_name : "Sign in"}
-          className={`flex min-w-0 items-center rounded-lg py-1.5 transition-colors hover:bg-[var(--color-hover)] ${
-            collapsed ? "justify-center px-1.5" : "flex-1 gap-2 px-2"
-          }`}
-        >
-          {user ? (
-            <span
-              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-              style={{ background: "var(--color-accent)" }}
-            >
-              {user.display_name.charAt(0).toUpperCase()}
-            </span>
-          ) : (
-            <IconUser className="shrink-0" />
-          )}
-          {!collapsed && (
-            <span className="truncate text-[13px]" style={{ color: "var(--color-ink)" }}>
-              {user ? user.display_name : "Sign in"}
-            </span>
-          )}
-        </button>
-
-        {/* Appearance is a device preference, not an account feature, so it is
-            reachable without signing in - and distinct from Settings, which
-            this control used to be mistaken for. */}
+        <span className={collapsed ? "hidden" : "flex-1"} />
         <IconButton
           label={`Theme: ${theme}. Click to change.`}
           onClick={onCycleTheme}

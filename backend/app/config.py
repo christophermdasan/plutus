@@ -70,8 +70,8 @@ class Settings(BaseSettings):
     reranker_model: str = "jinaai/jina-reranker-v1-turbo-en"
 
     # --- Infrastructure ---------------------------------------------------
-    database_url: str = "postgresql://analyst:analyst@localhost:5433/analyst_copilot"
-    qdrant_url: str = "http://localhost:6333"
+    database_url: str = "postgresql://analyst:analyst@localhost:7592/analyst_copilot"
+    qdrant_url: str = "http://localhost:7593"
     # Collection name carries the embedding dimension: changing embedding
     # models invalidates every stored vector, and a distinct name makes that
     # a clean cutover instead of a silent dimension mismatch at query time.
@@ -93,6 +93,41 @@ class Settings(BaseSettings):
 
     # --- Retrieval tuning -------------------------------------------------
     candidate_pool: int = 25          # per retriever, before fusion
+    # Expand the retrieval query with the line-item vocabulary a filing
+    # actually prints (see app/retrieval/query_expansion.py).
+    #
+    # Off by default, on measurement rather than principle. It does what it
+    # was built to do - the evidence page for a capex question moves from
+    # rank 26 to rank 4 - but scored end to end it *cost* a point: the extra
+    # terms shift the query embedding enough to change which passages are
+    # retrieved for questions that were already working, and a
+    # fixed-asset-turnover question that scored +1 without it fell to an
+    # abstention with it. Widening recall for the questions that fail is not
+    # worth narrowing it for the ones that do not. The targeted mechanism in
+    # app/retrieval/fact_index.py addresses the same failure without
+    # touching the query the other questions depend on.
+    expand_queries: bool = False
+
+    # Slots in the context window reserved for passages from pages the fact
+    # index nominated as holding the figure asked about (see
+    # app/retrieval/fact_index.py). Three rather than one because a
+    # statement page splits into several passages and the line item wanted
+    # may not be in the first; small relative to context_passages so the
+    # reranker still decides most of the window.
+    anchor_slots: int = 3
+
+    # Slots preferred for passages from the filing section a narrative
+    # question is about (see app/retrieval/section_index.py). Half the
+    # window: enough to make the right section dominate, while leaving room
+    # for retrieval to be right when the section was misjudged.
+    section_slots: int = 4
+
+    # Answer metric questions by computing from the figures the filing
+    # reports, instead of asking the model to read them and do the
+    # arithmetic. Off makes the system fall back to retrieval for
+    # everything, which is how it behaved before and is worth keeping
+    # switchable for comparison.
+    use_metric_engine: bool = True
     # Fused candidates sent to the reranker. Was 12, which discarded the
     # answer before it could be judged: measured on the AMD 10-K, BM25 found
     # the right page for 5 of 7 questions and vectors for 4 of 7, yet only 1
@@ -107,6 +142,19 @@ class Settings(BaseSettings):
     # rank just outside a narrow window. On Apple's FY2025 filing the
     # segment table holding the answer ranked 6th, one place outside a
     # 5-passage cut, and the question was wrongly refused.
+    #
+    # Tried at 20 against the FinanceBench practice set on the theory that a
+    # cut at 8 discards answers retrieval already found - the evidence page
+    # ranked 10th to 26th on several refused questions. Measured, it made
+    # the score *worse*, and the mechanism is worth recording because it is
+    # not obvious: with 8 passages the model answered a fixed-asset-turnover
+    # question by showing its inputs ("revenue $6,489M, average PP&E
+    # $267.5M, ratio 24.26"); with 20 it answered a bare, wrong "24.67".
+    # More context did not add evidence so much as dilute it, and a diluted
+    # context produces answers that assert a figure without deriving it -
+    # which is precisely the shape the verifier is weakest against. Left at
+    # 8; the passages ranked below it are better recovered by making the
+    # right one rank higher (see query_expansion) than by widening the net.
     context_passages: int = 8
     # Reranker score below which we decline to answer at all.
     #
@@ -139,11 +187,20 @@ class Settings(BaseSettings):
     storage_dir: Path = REPO_ROOT / "storage"
 
     # --- HTTP -------------------------------------------------------------
+    # The dev server's pinned origin, and only it. This used to list
+    # 5173-5176 because Vite silently steps to the next free port when its
+    # default is taken, so the UI could come up on any of them - and if it
+    # landed past the end of the range every request was blocked by CORS
+    # while the page itself loaded fine, which reads as "no filings" rather
+    # than as an error. The dev server now pins its port and refuses to
+    # start if it is taken (see frontend/vite.config.ts), so there is one
+    # origin to allow and a conflict is reported instead of hidden.
+    #
+    # Both spellings of the loopback host are listed because a browser
+    # treats them as different origins.
     cors_origins: list[str] = [
-        "http://localhost:5173",
-        "http://localhost:5174",
-        "http://localhost:5175",
-        "http://localhost:5176",
+        "http://localhost:7591",
+        "http://127.0.0.1:7591",
     ]
 
     log_level: str = "INFO"

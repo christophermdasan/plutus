@@ -96,6 +96,16 @@ class Passage:
 class Citation:
     page: int
     quote: str
+    # The number printed on that page, when the document's own numbering
+    # runs behind our sequential count (a cover page or contents leaf is
+    # counted but not numbered). `page` stays the internal index the source
+    # viewer navigates by; `label` is what the reader should be told, so a
+    # citation names a page they can actually find. Equal on most filings.
+    label: int | None = None
+
+    @property
+    def display_page(self) -> int:
+        return self.label if self.label is not None else self.page
 
 
 @dataclass
@@ -116,11 +126,25 @@ class Answer:
     found: bool
     filing_id: str
     answer: str = ""
-    citation: Citation | None = None
+    # Every page the answer rests on. A quarter of real analyst questions
+    # combine figures from two statements, and each figure has to be
+    # checkable against the page it came from.
+    citations: list[Citation] = field(default_factory=list)
     reason: str = ""
     considered: list[RejectedPassage] = field(default_factory=list)
     model: str | None = None
     latency_ms: int = 0
+
+    @property
+    def citation(self) -> Citation | None:
+        """The first citation.
+
+        The stored chat history, the API response and the source drawer are
+        all built around a single page and quote. Keeping this as a property
+        means multi-citation answers degrade gracefully everywhere that has
+        not been taught about the list yet, rather than breaking.
+        """
+        return self.citations[0] if self.citations else None
 
 
 @dataclass
@@ -144,6 +168,11 @@ class ChatMessage:
     found: bool = False
     page: int | None = None
     quote: str = ""
+    # Every place the figure is reported. `page`/`quote` above remain the
+    # primary one the source drawer opens to; this is that plus the
+    # alternates, so history reloads with the same evidence the live answer
+    # offered.
+    citations: list[Citation] = field(default_factory=list)
     reason: str = ""
     latency_ms: int = 0
     model: str | None = None

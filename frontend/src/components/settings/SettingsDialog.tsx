@@ -1,25 +1,21 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { ApiError, auth as authApi, setToken, settings as settingsApi } from "../../lib/api";
-import type { LLMStatus, User } from "../../lib/types";
+import { useEffect, useState } from "react";
+import { ApiError, settings as settingsApi } from "../../lib/api";
+import type { LLMStatus } from "../../lib/types";
 import type { Theme } from "../../lib/hooks/useTheme";
-import { useToast } from "../../lib/hooks/useToast";
-import { Badge, Button, Dialog, Input, Label, Spinner } from "../ui";
-import { IconAlert, IconCheck, IconMonitor, IconMoon, IconSun, IconUser, IconX } from "../ui/icons";
+import { Badge, Button, Dialog, Spinner } from "../ui";
+import { IconAlert, IconCheck, IconMonitor, IconMoon, IconSun, IconX } from "../ui/icons";
 
-type Section = "general" | "account" | "connection";
+type Section = "general" | "connection";
 
 interface Props {
   open: boolean;
-  user: User | null;
   theme: Theme;
   onClose: () => void;
   onThemeChange: (theme: Theme) => void;
-  onUserChange: (user: User | null) => void;
 }
 
 const SECTIONS: { id: Section; label: string }[] = [
   { id: "general", label: "General" },
-  { id: "account", label: "Account" },
   { id: "connection", label: "Connection" },
 ];
 
@@ -81,127 +77,6 @@ function GeneralSection({ theme, onThemeChange }: { theme: Theme; onThemeChange:
       >
         <span />
       </Row>
-    </div>
-  );
-}
-
-function AccountSection({ user, onUserChange }: { user: User | null; onUserChange: (u: User | null) => void }) {
-  const toast = useToast();
-  const [name, setName] = useState(user?.display_name ?? "");
-  const [savingName, setSavingName] = useState(false);
-  const [current, setCurrent] = useState("");
-  const [next, setNext] = useState("");
-  const [savingPassword, setSavingPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => setName(user?.display_name ?? ""), [user]);
-
-  if (!user) {
-    return (
-      <div className="py-8 text-center">
-        <IconUser className="mx-auto mb-2" size={22} />
-        <p className="text-[13px]" style={{ color: "var(--color-ink-muted)" }}>
-          You're using Analyst Copilot as a guest.
-        </p>
-        <p className="mt-1 text-[12px]" style={{ color: "var(--color-ink-faint)" }}>
-          Sign in to keep your filings and history across devices. Everything works either way.
-        </p>
-      </div>
-    );
-  }
-
-  async function saveName(e: FormEvent) {
-    e.preventDefault();
-    setSavingName(true);
-    try {
-      onUserChange(await authApi.updateName(name.trim()));
-      toast("Name updated", "success");
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Couldn't update name", "error");
-    } finally {
-      setSavingName(false);
-    }
-  }
-
-  async function savePassword(e: FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setSavingPassword(true);
-    try {
-      await authApi.changePassword(current, next);
-      setCurrent("");
-      setNext("");
-      toast("Password changed", "success");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Couldn't change password");
-    } finally {
-      setSavingPassword(false);
-    }
-  }
-
-  return (
-    <div className="space-y-6">
-      <div>
-        <Label>Email</Label>
-        <div className="text-[13px]" style={{ color: "var(--color-ink-muted)" }}>
-          {user.email}
-        </div>
-      </div>
-
-      <form onSubmit={saveName}>
-        <Label>Display name</Label>
-        <div className="flex gap-2">
-          <Input value={name} onChange={(e) => setName(e.target.value)} />
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={savingName || !name.trim() || name.trim() === user.display_name}
-          >
-            {savingName ? <Spinner /> : "Save"}
-          </Button>
-        </div>
-      </form>
-
-      <form onSubmit={savePassword}>
-        <Label>Change password</Label>
-        <div className="space-y-2">
-          <Input
-            type="password"
-            autoComplete="current-password"
-            placeholder="Current password"
-            value={current}
-            onChange={(e) => setCurrent(e.target.value)}
-          />
-          <Input
-            type="password"
-            autoComplete="new-password"
-            placeholder="New password (8+ characters)"
-            value={next}
-            onChange={(e) => setNext(e.target.value)}
-          />
-          {error && (
-            <p className="flex items-start gap-1.5 text-[12px]" style={{ color: "var(--color-error)" }}>
-              <IconAlert size={13} className="mt-0.5 shrink-0" />
-              {error}
-            </p>
-          )}
-          <Button type="submit" variant="primary" disabled={savingPassword || !current || next.length < 8}>
-            {savingPassword ? <Spinner /> : "Change password"}
-          </Button>
-        </div>
-      </form>
-
-      <div className="border-t pt-4" style={{ borderColor: "var(--color-border)" }}>
-        <Button
-          onClick={() => {
-            setToken(null);
-            onUserChange(null);
-            toast("Signed out");
-          }}
-        >
-          Sign out
-        </Button>
-      </div>
     </div>
   );
 }
@@ -310,7 +185,7 @@ function ConnectionSection() {
   );
 }
 
-export function SettingsDialog({ open, user, theme, onClose, onThemeChange, onUserChange }: Props) {
+export function SettingsDialog({ open, theme, onClose, onThemeChange }: Props) {
   const [section, setSection] = useState<Section>("general");
 
   return (
@@ -344,7 +219,6 @@ export function SettingsDialog({ open, user, theme, onClose, onThemeChange, onUs
 
         <div className="min-w-0 flex-1 p-5">
           {section === "general" && <GeneralSection theme={theme} onThemeChange={onThemeChange} />}
-          {section === "account" && <AccountSection user={user} onUserChange={onUserChange} />}
           {section === "connection" && <ConnectionSection />}
         </div>
       </div>

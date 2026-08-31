@@ -49,6 +49,20 @@ class LLMNotConfiguredError(LLMError):
     """No API key is configured, so generation cannot run at all."""
 
 
+class LLMMalformedResponseError(LLMError):
+    """The provider answered, but not in the shape the schema requires.
+
+    Distinct from a generic LLMError because it is not a failure of the
+    provider or of the question: the model produced an answer and mangled
+    the JSON around it - a stray quote inside a page number was enough,
+    observed live with a correct figure and correct citations inside. It is
+    retried first, and if it persists the honest outcome is "not found"
+    rather than an error page, because no *verified* answer could be
+    produced. The raw output is deliberately not carried in the message;
+    the user is told the shape of the failure, not shown broken JSON.
+    """
+
+
 class LLMRateLimitedError(LLMError):
     """The provider's usage limit is exhausted.
 

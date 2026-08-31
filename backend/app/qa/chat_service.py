@@ -17,6 +17,8 @@ import threading
 
 from app.domain.models import Answer, ChatSession
 from app.exceptions import FilingNotReadyError, NotFoundError
+from app.finance import fact_store
+from app.ingestion.page_labels import detect_offset
 from app.retrieval.retriever import HybridRetriever
 
 logger = logging.getLogger(__name__)
@@ -58,14 +60,38 @@ class ChatService:
         with _cache_lock:
             if filing_id not in self._cache:
                 passages, page_text = self._pipeline.load_index(filing_id)
+                ordered_pages = [page_text[i] for i in sorted(page_text)]
                 retriever = HybridRetriever(
                     passages=passages,
                     vector_store=self._vectors,
                     embedder=self._embedder,
                     reranker=self._reranker,
                     filing_id=filing_id,
+                    xbrl_pages=self._pipeline.load_xbrl_pages(filing_id),
+                    page_text=ordered_pages,
                 )
-                self._cache[filing_id] = (retriever, page_text)
+                # Built once per filing and cached beside the retriever, for
+                # the same reason: it parses every statement line in the
+                # document, which is not work to repeat per question.
+                #
+                # Without this the deterministic engine was unreachable from
+                # the running application - `route()` reads has_facts, and an
+                # absent store made every question, including ones a formula
+                # answers exactly, go to the model.
+                try:
+                    facts = fact_store.build(
+                        ordered_pages, self._pipeline.load_facts(filing_id)
+                    )
+                except Exception:
+                    logger.warning(
+                        "Fact store could not be built for %s; questions will "
+                        "be answered by retrieval alone", filing_id, exc_info=True,
+                    )
+                    facts = None
+                # Detected once per filing: it is a property of the
+                # document's front matter, not of any one question.
+                offset = detect_offset(ordered_pages)
+                self._cache[filing_id] = (retriever, page_text, facts, offset)
             return self._cache[filing_id]
 
     def invalidate(self, filing_id: str) -> None:
@@ -97,9 +123,12 @@ class ChatService:
             )
 
         session = self.ensure_session(filing_id, user_id, session_id)
-        retriever, page_text = self._retriever_for(filing_id)
+        retriever, page_text, facts, page_offset = self._retriever_for(filing_id)
 
-        answer = self._answers.answer(question, filing_id, retriever, page_text)
+        answer = self._answers.answer(
+            question, filing_id, retriever, page_text, fact_store=facts,
+            page_offset=page_offset,
+        )
 
         message = self._chats.add_message(
             session.id,
@@ -108,6 +137,10 @@ class ChatService:
             found=answer.found,
             page=answer.citation.page if answer.citation else None,
             quote=answer.citation.quote if answer.citation else "",
+            # Not just the primary one: the alternates are what let a reader
+            # check the figure against the statement, the MD&A or a note
+            # after reopening the conversation.
+            citations=[(c.page, c.quote, c.label) for c in answer.citations],
             reason=answer.reason,
             latency_ms=answer.latency_ms,
             model=answer.model,

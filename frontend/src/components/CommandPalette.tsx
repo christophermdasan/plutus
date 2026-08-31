@@ -27,7 +27,8 @@ export function CommandPalette({ open, filings, onClose, onSelectFiling, onOpenA
     if (open) {
       setQuery("");
       setMessages([]);
-      setTimeout(() => inputRef.current?.focus(), 0);
+      const timer = setTimeout(() => inputRef.current?.focus(), 0);
+      return () => clearTimeout(timer);
     }
   }, [open]);
 
@@ -44,10 +45,17 @@ export function CommandPalette({ open, filings, onClose, onSelectFiling, onOpenA
       setMessages([]);
       return;
     }
+    let active = true;
     const timer = setTimeout(() => {
-      chatApi.search(query.trim()).then(setMessages).catch(() => setMessages([]));
+      chatApi
+        .search(query.trim())
+        .then((results) => active && setMessages(results))
+        .catch(() => active && setMessages([]));
     }, 220);
-    return () => clearTimeout(timer);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
   }, [query, open]);
 
   const matchingFilings = useMemo(() => {
@@ -65,6 +73,16 @@ export function CommandPalette({ open, filings, onClose, onSelectFiling, onOpenA
   if (!open) return null;
 
   const nothing = matchingFilings.length === 0 && messages.length === 0 && query.trim().length >= 2;
+
+  // `page` is the viewer's sequential page index.  For filings with
+  // unnumbered front matter, `label` is the page number printed in the filing
+  // and is the number an analyst uses to verify the evidence by hand.
+  function pageReference(message: Message) {
+    if (!message.page) return null;
+    const printedPage = message.citations?.find((citation) => citation.page === message.page)?.label;
+    if (printedPage == null || printedPage === message.page) return `p. ${message.page}`;
+    return `p. ${printedPage} (viewer ${message.page})`;
+  }
 
   return (
     <div
@@ -129,21 +147,24 @@ export function CommandPalette({ open, filings, onClose, onSelectFiling, onOpenA
               <div className="mt-2 px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide" style={{ color: "var(--color-ink-faint)" }}>
                 Past answers
               </div>
-              {messages.map((m) => (
-                <button
-                  key={m.id}
-                  onClick={() => { onOpenAnswer(m); onClose(); }}
-                  className="w-full rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--color-hover)]"
-                >
-                  <div className="truncate text-[13px]" style={{ color: "var(--color-ink)" }}>
-                    {m.question}
-                  </div>
-                  <div className="truncate text-[12px]" style={{ color: "var(--color-ink-muted)" }}>
-                    {m.found ? m.answer : "Not found in this filing"}
-                    {m.page ? ` · p. ${m.page}` : ""}
-                  </div>
-                </button>
-              ))}
+              {messages.map((m) => {
+                const reference = pageReference(m);
+                return (
+                    <button
+                      key={m.id}
+                      onClick={() => { onOpenAnswer(m); onClose(); }}
+                      className="w-full rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--color-hover)]"
+                    >
+                      <div className="truncate text-[13px]" style={{ color: "var(--color-ink)" }}>
+                        {m.question}
+                      </div>
+                      <div className="truncate text-[12px]" style={{ color: "var(--color-ink-muted)" }}>
+                        {m.found ? m.answer : "Not found in this filing"}
+                        {reference ? ` · ${reference}` : ""}
+                      </div>
+                    </button>
+                );
+              })}
             </>
           )}
 

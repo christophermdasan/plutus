@@ -15,8 +15,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-BACKEND_PORT=8001
-FRONTEND_PORT=5173
+BACKEND_PORT=7590
+FRONTEND_PORT=7591
 RUN_DIR="$ROOT/.run"
 mkdir -p "$RUN_DIR"
 
@@ -48,17 +48,66 @@ esac
 
 stop_all() {
   step "Stopping Plutus"
+
+  # Stop the processes recorded when bootstrap launched the app. The frontend
+  # PID is normally npm/cmd rather than Vite itself, so the port sweep below is
+  # still required to catch child processes and manually started servers.
   for name in backend frontend; do
     if [ -f "$RUN_DIR/$name.pid" ]; then
       pid="$(cat "$RUN_DIR/$name.pid")"
-      if kill -0 "$pid" 2>/dev/null; then kill "$pid" 2>/dev/null || true; ok "stopped $name (pid $pid)"; fi
+      if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null || true
+        ok "stopped $name (pid $pid)"
+      fi
       rm -f "$RUN_DIR/$name.pid"
     fi
   done
+
+  # PID files may be stale/missing, and npm can leave Vite running after its
+  # parent exits. Stop whatever still owns the two ports reserved for Plutus.
+  for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+    pids=""
+    if have lsof; then
+      pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+    elif have fuser; then
+      pids="$(fuser "$port/tcp" 2>/dev/null || true)"
+    fi
+
+    if [ -n "$pids" ]; then
+      for pid in $pids; do
+        case "$pid" in *[!0-9]*) continue ;; esac
+        kill "$pid" 2>/dev/null || true
+      done
+
+      # Give servers a brief chance to shut down cleanly before forcing them.
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        remaining=""
+        for pid in $pids; do
+          kill -0 "$pid" 2>/dev/null && remaining="$remaining $pid"
+        done
+        [ -z "$remaining" ] && break
+        sleep 0.1
+      done
+      for pid in $remaining; do kill -9 "$pid" 2>/dev/null || true; done
+      ok "stopped process listening on port $port"
+    fi
+  done
+
+  # Do not claim success while either application endpoint is still bound.
+  if have lsof; then
+    for port in "$BACKEND_PORT" "$FRONTEND_PORT"; do
+      if lsof -tiTCP:"$port" -sTCP:LISTEN >/dev/null 2>&1; then
+        die "Could not stop the process listening on port $port."
+      fi
+    done
+  fi
+
   if have docker && docker info >/dev/null 2>&1; then
     # `stop`, not `down`: it clears the restart policy without deleting the
     # volumes your filings and vectors live in.
-    docker compose stop >/dev/null 2>&1 && ok "stopped database and vector store"
+    docker compose stop >/dev/null 2>&1 \
+      || die "Could not stop the database and vector store."
+    ok "stopped database and vector store"
   fi
   printf "\n  %sPlutus stopped.%s Your data is kept.\n\n" "$BOLD" "$RESET"
   exit 0
@@ -168,27 +217,22 @@ ensure_env() {
   warn "No LLM API key set yet."
   cat <<'EOF'
 
-  Plutus answers questions with a hosted model. Get a free key from either:
+  Plutus answers questions with OpenRouter's free MiniMax M3 model.
 
-    Google AI Studio   https://aistudio.google.com/apikey     (generous free tier)
-    Groq               https://console.groq.com               (fast, smaller free tier)
+    Create a key   https://openrouter.ai/keys
+    Model          minimax/minimax-m3:free
 
 EOF
-  printf "  Paste your API key (or press Enter to skip and add it later): "
+  printf "  Paste your OpenRouter API key (or press Enter to skip): "
   read -r key || true
   if [ -n "${key:-}" ]; then
-    # Default to Gemini, which is what most people will have just signed up for.
-    if [[ "$key" == gsk_* ]]; then
-      base="https://api.groq.com/openai/v1"; model="openai/gpt-oss-120b"
-    else
-      base="https://generativelanguage.googleapis.com/v1beta/openai/"; model="gemini-3.1-flash-lite"
-    fi
-    python3 - "$key" "$base" "$model" <<'PY'
+    # Keep the OpenRouter endpoint and MiniMax model copied from .env.example;
+    # entering a key must not silently switch providers.
+    "$PYTHON" - "$key" <<'PY'
 import re, sys, pathlib
-key, base, model = sys.argv[1:4]
+key = sys.argv[1]
 p = pathlib.Path(".env"); t = p.read_text()
-for name, value in (("LLM_API_KEY", key), ("LLM_BASE_URL", base), ("LLM_MODEL", model)):
-    t = re.sub(rf"(?m)^{name}=.*$", f"{name}={value}", t) if re.search(rf"(?m)^{name}=", t) else t + f"\n{name}={value}\n"
+t = re.sub(r"(?m)^LLM_API_KEY=.*$", f"LLM_API_KEY={key}", t) if re.search(r"(?m)^LLM_API_KEY=", t) else t + f"\nLLM_API_KEY={key}\n"
 p.write_text(t)
 PY
     ok "API key saved to .env"

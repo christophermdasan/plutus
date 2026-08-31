@@ -105,6 +105,24 @@ MIGRATIONS: list[Migration] = [
         ALTER TABLE filings ADD COLUMN IF NOT EXISTS custom_title TEXT;
         """,
     ),
+    (
+        # A figure is usually printed in several places - the statement, the
+        # MD&A discussion of it, a note - and each is a truthful citation.
+        # The answer carries all of them so a reader can check the figure
+        # wherever they trust most, but only the first was ever stored, so
+        # reopening a conversation lost the alternates.
+        #
+        # JSONB rather than a child table: citations are always read as a
+        # whole with their message, never queried across messages, and a
+        # join buys nothing for a list of two or three rows. `page` and
+        # `quote` stay as they are - they are the primary citation the
+        # source drawer opens to, and keeping them avoids rewriting every
+        # existing row.
+        "0004_message_citations",
+        """
+        ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS citations JSONB;
+        """,
+    ),
 ]
 
 _TRACKING_TABLE = """

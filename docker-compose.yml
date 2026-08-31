@@ -13,7 +13,7 @@ services:
       POSTGRES_PASSWORD: analyst
       POSTGRES_DB: analyst_copilot
     ports:
-      - "5433:5432"
+      - "7592:5432"
     volumes:
       # PGDATA must be a named volume, not a host bind mount. Postgres refuses
       # to start unless its data directory is 0700 or 0750, and a Windows bind
@@ -34,7 +34,7 @@ services:
     image: qdrant/qdrant:latest
     restart: unless-stopped
     ports:
-      - "6333:6333"
+      - "7593:6333"
     volumes:
       # A named volume, for the same reason as Postgres but a different
       # symptom. Qdrant tolerates the permissions a Windows bind mount

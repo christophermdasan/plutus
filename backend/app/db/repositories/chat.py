@@ -11,10 +11,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from psycopg.types.json import Json
 from psycopg_pool import ConnectionPool
 
 from app.domain.enums import MessageRole
-from app.domain.models import ChatMessage, ChatSession
+from app.domain.models import ChatMessage, ChatSession, Citation
 
 
 def _to_session(row: dict[str, Any]) -> ChatSession:
@@ -29,6 +30,26 @@ def _to_session(row: dict[str, Any]) -> ChatSession:
     )
 
 
+def _citations_from_row(row: dict[str, Any]) -> list[Citation]:
+    """The stored citations, or the primary one promoted to a list.
+
+    Rows written before the citations column existed have NULL there. Their
+    page and quote are still a real citation, so they are returned as a
+    one-entry list rather than as "this answer cited nothing" - which would
+    strip the evidence link from every message already in the database.
+    """
+    stored = row.get("citations")
+    if stored:
+        return [
+            Citation(page=item["page"], quote=item.get("quote", ""), label=item.get("label"))
+            for item in stored
+            if item.get("page") is not None
+        ]
+    if row.get("page") is not None:
+        return [Citation(page=row["page"], quote=row.get("quote") or "")]
+    return []
+
+
 def _to_message(row: dict[str, Any]) -> ChatMessage:
     return ChatMessage(
         id=row["id"],
@@ -39,6 +60,7 @@ def _to_message(row: dict[str, Any]) -> ChatMessage:
         found=row["found"],
         page=row["page"],
         quote=row["quote"] or "",
+        citations=_citations_from_row(row),
         reason=row["reason"] or "",
         latency_ms=row["latency_ms"] or 0,
         model=row["model"],
@@ -124,15 +146,29 @@ class ChatRepository:
         reason: str,
         latency_ms: int,
         model: str | None,
+        citations: list[tuple] | None = None,
     ) -> ChatMessage:
+        # (page, quote) and (page, quote, label) are both accepted: the
+        # printed label is optional information about a citation, not part
+        # of what makes one, and requiring it would force every caller to
+        # know about a filing's front matter.
+        payload = (
+            Json([
+                {"page": c[0], "quote": c[1], "label": c[2] if len(c) > 2 else None}
+                for c in citations
+            ])
+            if citations
+            else None
+        )
         with self._pool.connection() as conn:
             row = conn.execute(
                 """INSERT INTO chat_messages
                      (session_id, role, question, answer, found, page, quote,
-                      reason, latency_ms, model)
-                   VALUES (%s, 'assistant', %s, %s, %s, %s, %s, %s, %s, %s)
+                      reason, latency_ms, model, citations)
+                   VALUES (%s, 'assistant', %s, %s, %s, %s, %s, %s, %s, %s, %s)
                    RETURNING *""",
-                (session_id, question, answer, found, page, quote, reason, latency_ms, model),
+                (session_id, question, answer, found, page, quote, reason, latency_ms,
+                 model, payload),
             ).fetchone()
             # Touch the session so recency ordering reflects real activity.
             conn.execute(

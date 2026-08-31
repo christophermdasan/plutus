@@ -26,6 +26,24 @@ export interface Considered {
   score: number;
 }
 
+/**
+ * One place a figure is reported. A headline number is usually printed in
+ * several - the statement, the MD&A discussion, a note - and each is a
+ * truthful citation, so the answer offers all of them and the reader checks
+ * whichever they trust.
+ */
+export interface Citation {
+  page: number;
+  quote: string;
+  /**
+   * The number printed on that page. `page` is the sequential index the
+   * viewer scrolls to; a filing whose cover and contents leaves are counted
+   * but not numbered prints something lower - JPMorgan's 2022 10-K runs two
+   * behind - and the reader has to be told the number their copy shows.
+   */
+  label?: number | null;
+}
+
 /** An answer as returned by /chat/ask. */
 export interface AnswerResult {
   message_id: number;
@@ -35,6 +53,7 @@ export interface AnswerResult {
   answer: string;
   page: number | null;
   quote: string;
+  citations: Citation[];
   reason: string;
   considered: Considered[];
   latency_ms: number;
@@ -50,6 +69,7 @@ export interface Message {
   found: boolean;
   page: number | null;
   quote: string;
+  citations: Citation[];
   reason: string;
   latency_ms: number;
   feedback: number | null;
@@ -89,6 +109,8 @@ export interface SourceRef {
   filingId: string;
   filingName: string;
   page: number;
+  /** The printed page number, when it differs from `page`. */
+  label?: number | null;
   quote: string;
   question?: string;
   answer?: string;
